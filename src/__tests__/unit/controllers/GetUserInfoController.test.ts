@@ -15,6 +15,7 @@ describe('GetUserInfoController', () => {
     name: 'Test',
     username: 'testuser',
     email: 'test@example.com',
+    role: 'user' as const,
   };
 
   beforeEach(() => {

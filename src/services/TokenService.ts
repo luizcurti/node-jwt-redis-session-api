@@ -1,6 +1,7 @@
 import { randomBytes, createHash, timingSafeEqual } from 'crypto';
 import { sign, verify } from 'jsonwebtoken';
 import { UnauthorizedError } from '../errors/AppError';
+import { UserRole } from '../types/user';
 
 const ACCESS_TOKEN_EXPIRES_IN = '15m';
 const REFRESH_TOKEN_VALIDATOR_BYTES = 32;
@@ -16,6 +17,7 @@ const JWT_AUDIENCE = 'jwt-redis-postgres-api-clients';
 export type AccessTokenPayload = {
   subject: string;
   sessionId: string;
+  role: UserRole;
 };
 
 export type RefreshTokenPair = {
@@ -29,8 +31,8 @@ export type SplitRefreshToken = {
 };
 
 export class TokenService {
-  signAccessToken(userId: string, sessionId: string): string {
-    return sign({ sid: sessionId }, this.getSecret(), {
+  signAccessToken(userId: string, sessionId: string, role: UserRole): string {
+    return sign({ sid: sessionId, role }, this.getSecret(), {
       subject: userId,
       expiresIn: ACCESS_TOKEN_EXPIRES_IN,
       algorithm: JWT_ALGORITHM,
@@ -48,13 +50,18 @@ export class TokenService {
       }) as {
         sub: string;
         sid: string;
+        role: string;
       };
 
-      if (!decoded.sub || !decoded.sid) {
+      if (!decoded.sub || !decoded.sid || !decoded.role) {
         throw new Error('Malformed access token payload');
       }
 
-      return { subject: decoded.sub, sessionId: decoded.sid };
+      return {
+        subject: decoded.sub,
+        sessionId: decoded.sid,
+        role: decoded.role as UserRole,
+      };
     } catch {
       throw new UnauthorizedError('Invalid token');
     }

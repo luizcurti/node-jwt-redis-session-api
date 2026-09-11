@@ -65,6 +65,7 @@ describe('authentication middleware', () => {
     tokenService.verifyAccessToken.mockReturnValue({
       subject: 'user-1',
       sessionId: 'session-1',
+      role: 'user',
     });
     sessionRepository.get.mockResolvedValueOnce(null);
 
@@ -76,14 +77,16 @@ describe('authentication middleware', () => {
     );
   });
 
-  it('sets request.userId/sessionId and calls next on a valid session', async () => {
+  it('sets request.userId/sessionId/userRole and calls next on a valid session', async () => {
     request.headers = { authorization: 'Bearer good-token' };
     tokenService.verifyAccessToken.mockReturnValue({
       subject: 'user-1',
       sessionId: 'session-1',
+      role: 'admin',
     });
     sessionRepository.get.mockResolvedValueOnce({
       userId: 'user-1',
+      role: 'admin',
       refreshTokenHash: 'hash',
       createdAt: 0,
       expiresAt: 0,
@@ -93,6 +96,7 @@ describe('authentication middleware', () => {
 
     expect(request.userId).toBe('user-1');
     expect(request.sessionId).toBe('session-1');
+    expect(request.userRole).toBe('admin');
     expect(next).toHaveBeenCalledTimes(1);
     expect(next).toHaveBeenCalledWith();
   });

@@ -9,7 +9,7 @@ import {
   SessionRepository,
 } from '../repositories/SessionRepository';
 import { UserRepository } from '../repositories/UserRepository';
-import { toPublicUser, UserPublic } from '../types/user';
+import { toPublicUser, UserPublic, UserRole } from '../types/user';
 import { parseOrThrow } from '../validation/parse';
 import { TokenService } from './TokenService';
 
@@ -64,7 +64,8 @@ export class AuthService {
     const sessionId = randomUUID();
     const { accessToken, refreshToken } = await this.issueSession(
       user.id,
-      sessionId
+      sessionId,
+      user.role
     );
     const publicUser = toPublicUser(user);
 
@@ -111,7 +112,12 @@ export class AuthService {
       throw new UnauthorizedError('Invalid refresh token.');
     }
 
-    return this.issueSession(session.userId, sessionId, session.createdAt);
+    return this.issueSession(
+      session.userId,
+      sessionId,
+      session.role,
+      session.createdAt
+    );
   }
 
   async logout(sessionId?: string): Promise<void> {
@@ -125,18 +131,24 @@ export class AuthService {
   private async issueSession(
     userId: string,
     sessionId: string,
+    role: UserRole,
     createdAt: number = Date.now()
   ): Promise<{ accessToken: string; refreshToken: string }> {
     const { validator, hash } = this.tokenService.generateRefreshToken();
 
     await this.sessionRepository.set(sessionId, {
       userId,
+      role,
       refreshTokenHash: hash,
       createdAt,
       expiresAt: Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000,
     });
 
-    const accessToken = this.tokenService.signAccessToken(userId, sessionId);
+    const accessToken = this.tokenService.signAccessToken(
+      userId,
+      sessionId,
+      role
+    );
     const refreshToken = `${sessionId}.${validator}`;
 
     return { accessToken, refreshToken };

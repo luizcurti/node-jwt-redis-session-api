@@ -18,29 +18,30 @@ describe('TokenService', () => {
   });
 
   describe('signAccessToken / verifyAccessToken', () => {
-    it('signs a token whose subject and session can be recovered', () => {
-      const token = tokenService.signAccessToken('user-1', 'session-1');
+    it('signs a token whose subject, session, and role can be recovered', () => {
+      const token = tokenService.signAccessToken('user-1', 'session-1', 'user');
 
       expect(tokenService.verifyAccessToken(token)).toEqual({
         subject: 'user-1',
         sessionId: 'session-1',
+        role: 'user',
       });
     });
 
     it('throws when JWT_SECRET is not set', () => {
       delete process.env.JWT_SECRET;
 
-      expect(() => tokenService.signAccessToken('user-1', 'session-1')).toThrow(
-        'JWT_SECRET environment variable is not set'
-      );
+      expect(() =>
+        tokenService.signAccessToken('user-1', 'session-1', 'user')
+      ).toThrow('JWT_SECRET environment variable is not set');
     });
 
     it('throws when JWT_SECRET is shorter than 32 characters', () => {
       process.env.JWT_SECRET = 'too-short';
 
-      expect(() => tokenService.signAccessToken('user-1', 'session-1')).toThrow(
-        'JWT_SECRET must be at least 32 characters long'
-      );
+      expect(() =>
+        tokenService.signAccessToken('user-1', 'session-1', 'user')
+      ).toThrow('JWT_SECRET must be at least 32 characters long');
     });
 
     it('throws UnauthorizedError for a malformed token', () => {
@@ -50,8 +51,32 @@ describe('TokenService', () => {
     });
 
     it('throws UnauthorizedError for a token signed with a different secret', () => {
-      const token = tokenService.signAccessToken('user-1', 'session-1');
+      const token = tokenService.signAccessToken('user-1', 'session-1', 'user');
       process.env.JWT_SECRET = 'a-different-secret-that-is-at-least-32-chars';
+
+      expect(() => tokenService.verifyAccessToken(token)).toThrow(
+        UnauthorizedError
+      );
+    });
+
+    it('throws UnauthorizedError for a token with the wrong issuer', () => {
+      const token = sign({ sid: 'session-1' }, validSecret, {
+        subject: 'user-1',
+        issuer: 'some-other-service',
+        audience: 'jwt-redis-postgres-api-clients',
+      });
+
+      expect(() => tokenService.verifyAccessToken(token)).toThrow(
+        UnauthorizedError
+      );
+    });
+
+    it('throws UnauthorizedError for a token with the wrong audience', () => {
+      const token = sign({ sid: 'session-1' }, validSecret, {
+        subject: 'user-1',
+        issuer: 'jwt-redis-postgres-api',
+        audience: 'some-other-audience',
+      });
 
       expect(() => tokenService.verifyAccessToken(token)).toThrow(
         UnauthorizedError
@@ -64,6 +89,28 @@ describe('TokenService', () => {
       expect(() => tokenService.verifyAccessToken(token)).toThrow(
         UnauthorizedError
       );
+    });
+
+    it('throws UnauthorizedError for a validly-signed token missing role', () => {
+      const token = sign({ sid: 'session-1' }, validSecret, {
+        subject: 'user-1',
+        issuer: 'jwt-redis-postgres-api',
+        audience: 'jwt-redis-postgres-api-clients',
+      });
+
+      expect(() => tokenService.verifyAccessToken(token)).toThrow(
+        UnauthorizedError
+      );
+    });
+
+    it('round-trips the admin role', () => {
+      const token = tokenService.signAccessToken(
+        'user-1',
+        'session-1',
+        'admin'
+      );
+
+      expect(tokenService.verifyAccessToken(token).role).toBe('admin');
     });
 
     it('throws UnauthorizedError for an expired token', () => {

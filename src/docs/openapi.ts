@@ -5,6 +5,7 @@ const userPublicSchema = {
     name: { type: 'string' },
     username: { type: 'string' },
     email: { type: 'string', format: 'email' },
+    role: { type: 'string', enum: ['user', 'admin'] },
   },
 };
 
@@ -19,10 +20,12 @@ export const openapiSpec = {
   openapi: '3.0.3',
   info: {
     title: 'Node.js + Redis + PostgreSQL REST API',
-    version: '2.0.0',
+    version: '2.1.0',
     description:
       'User registration, JWT access/refresh authentication with Redis-backed ' +
-      'session revocation, and a separate Redis read-through profile cache.',
+      'session revocation, role-based access control, and a separate Redis ' +
+      'read-through profile cache. Business endpoints are versioned under ' +
+      '/v1; /health, /ready, and /docs are not.',
   },
   servers: [{ url: '/' }],
   components: {
@@ -41,7 +44,7 @@ export const openapiSpec = {
   paths: {
     '/': {
       get: {
-        summary: 'Health check',
+        summary: 'Root — server is running',
         responses: {
           '200': {
             description: 'Server is running',
@@ -49,7 +52,24 @@ export const openapiSpec = {
         },
       },
     },
-    '/users': {
+    '/health': {
+      get: {
+        summary: 'Liveness probe — no dependency checks',
+        responses: {
+          '200': { description: 'Always ok if the process can respond' },
+        },
+      },
+    },
+    '/ready': {
+      get: {
+        summary: 'Readiness probe — checks PostgreSQL and Redis',
+        responses: {
+          '200': { description: 'Both dependencies reachable' },
+          '503': { description: 'At least one dependency is unreachable' },
+        },
+      },
+    },
+    '/v1/users': {
       post: {
         summary: 'Create a new user',
         requestBody: {
@@ -99,7 +119,7 @@ export const openapiSpec = {
         },
       },
     },
-    '/login': {
+    '/v1/login': {
       post: {
         summary: 'Authenticate a user',
         requestBody: {
@@ -140,7 +160,7 @@ export const openapiSpec = {
         },
       },
     },
-    '/auth/refresh': {
+    '/v1/auth/refresh': {
       post: {
         summary: 'Rotate an access/refresh token pair',
         description:
@@ -181,7 +201,7 @@ export const openapiSpec = {
         },
       },
     },
-    '/auth/logout': {
+    '/v1/auth/logout': {
       post: {
         summary: "Revoke the caller's current session",
         description:
@@ -198,7 +218,7 @@ export const openapiSpec = {
         },
       },
     },
-    '/users/profile/{id}': {
+    '/v1/users/profile/{id}': {
       get: {
         summary: 'Get the authenticated user own profile from cache',
         security: [{ bearerAuth: [] }],
@@ -231,6 +251,62 @@ export const openapiSpec = {
           },
           '404': {
             description: 'The user does not exist in PostgreSQL',
+            content: { 'application/json': { schema: errorSchema } },
+          },
+        },
+      },
+    },
+    '/v1/admin/users': {
+      get: {
+        summary: 'List all users (admin only)',
+        description:
+          "Role-based access control: the caller's access token must carry " +
+          '`role: "admin"`, embedded at login time from PostgreSQL. There is ' +
+          'no self-service way to become an admin — see the README.',
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'limit',
+            in: 'query',
+            required: false,
+            description: 'Page size (default 20, max 100)',
+            schema: { type: 'integer', minimum: 1, maximum: 100 },
+          },
+          {
+            name: 'offset',
+            in: 'query',
+            required: false,
+            description: 'Number of rows to skip (default 0)',
+            schema: { type: 'integer', minimum: 0 },
+          },
+        ],
+        responses: {
+          '200': {
+            description: 'A page of users, ordered by id',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    items: { type: 'array', items: userPublicSchema },
+                    total: { type: 'integer' },
+                    limit: { type: 'integer' },
+                    offset: { type: 'integer' },
+                  },
+                },
+              },
+            },
+          },
+          '400': {
+            description: 'Invalid limit/offset',
+            content: { 'application/json': { schema: errorSchema } },
+          },
+          '401': {
+            description: 'Missing, invalid, or revoked token',
+            content: { 'application/json': { schema: errorSchema } },
+          },
+          '403': {
+            description: 'Authenticated, but not an admin',
             content: { 'application/json': { schema: errorSchema } },
           },
         },

@@ -10,6 +10,7 @@ describe('SessionRepository (integration)', () => {
 
   const record = {
     userId: 'user-1',
+    role: 'user' as const,
     refreshTokenHash: 'hash',
     createdAt: Date.now(),
     expiresAt: Date.now() + 60_000,

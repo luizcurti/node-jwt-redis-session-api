@@ -28,7 +28,7 @@ export class UserRepository {
 
   async findByUsername(username: string): Promise<UserRecord | null> {
     const { rows } = await this.pool.query<UserRecord>(
-      `SELECT ID, NAME, USERNAME, PASSWORD, EMAIL FROM USERS WHERE USERNAME = $1 LIMIT 1`,
+      `SELECT ID, NAME, USERNAME, PASSWORD, EMAIL, ROLE FROM USERS WHERE USERNAME = $1 LIMIT 1`,
       [username]
     );
 
@@ -37,11 +37,26 @@ export class UserRepository {
 
   async findById(id: string): Promise<UserRecord | null> {
     const { rows } = await this.pool.query<UserRecord>(
-      `SELECT ID, NAME, USERNAME, PASSWORD, EMAIL FROM USERS WHERE ID = $1 LIMIT 1`,
+      `SELECT ID, NAME, USERNAME, PASSWORD, EMAIL, ROLE FROM USERS WHERE ID = $1 LIMIT 1`,
       [id]
     );
 
     return rows[0] ?? null;
+  }
+
+  async listPaginated(
+    limit: number,
+    offset: number
+  ): Promise<{ items: UserRecord[]; total: number }> {
+    const [{ rows: items }, { rows: countRows }] = await Promise.all([
+      this.pool.query<UserRecord>(
+        `SELECT ID, NAME, USERNAME, PASSWORD, EMAIL, ROLE FROM USERS ORDER BY ID LIMIT $1 OFFSET $2`,
+        [limit, offset]
+      ),
+      this.pool.query<{ count: string }>(`SELECT COUNT(*) FROM USERS`),
+    ]);
+
+    return { items, total: Number(countRows[0].count) };
   }
 
   async existsByUsername(username: string): Promise<boolean> {

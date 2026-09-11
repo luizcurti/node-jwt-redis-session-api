@@ -10,7 +10,7 @@ import {
 
 async function createAndLoginUser(username: string) {
   await request(app)
-    .post('/users')
+    .post('/v1/users')
     .send({
       username,
       name: 'Test User',
@@ -19,13 +19,31 @@ async function createAndLoginUser(username: string) {
     });
 
   const loginRes = await request(app)
-    .post('/login')
+    .post('/v1/login')
     .send({ username, password: 'password123456' });
 
   return {
     accessToken: loginRes.body.accessToken as string,
     refreshToken: loginRes.body.refreshToken as string,
     id: loginRes.body.user.id as string,
+  };
+}
+
+// There is no self-service path to become an admin — this simulates the
+// manual bootstrap step (see README) directly against the database, the
+// same way a real operator would promote the first admin.
+async function createAndLoginAdmin(username: string) {
+  const user = await createAndLoginUser(username);
+  await testPool.query("UPDATE users SET role = 'admin' WHERE id = $1", [
+    user.id,
+  ]);
+  const loginRes = await request(app)
+    .post('/v1/login')
+    .send({ username, password: 'password123456' });
+
+  return {
+    accessToken: loginRes.body.accessToken as string,
+    id: user.id,
   };
 }
 
@@ -90,7 +108,7 @@ describe('App (e2e)', () => {
 
   describe('POST /users', () => {
     it('creates a new user', async () => {
-      const res = await request(app).post('/users').send({
+      const res = await request(app).post('/v1/users').send({
         username: 'newuser',
         name: 'New User',
         password: 'password123456',
@@ -104,7 +122,7 @@ describe('App (e2e)', () => {
 
     it('returns 400 when a required field is missing', async () => {
       const res = await request(app)
-        .post('/users')
+        .post('/v1/users')
         .send({ username: 'newuser' });
 
       expect(res.statusCode).toBe(400);
@@ -112,7 +130,7 @@ describe('App (e2e)', () => {
     });
 
     it('returns 400 when the username is too short', async () => {
-      const res = await request(app).post('/users').send({
+      const res = await request(app).post('/v1/users').send({
         username: 'ab',
         name: 'New User',
         password: 'password123456',
@@ -126,7 +144,7 @@ describe('App (e2e)', () => {
     });
 
     it('returns 400 when the email is not a valid address', async () => {
-      const res = await request(app).post('/users').send({
+      const res = await request(app).post('/v1/users').send({
         username: 'newuser',
         name: 'New User',
         password: 'password123456',
@@ -140,7 +158,7 @@ describe('App (e2e)', () => {
     });
 
     it('returns 400 when the password is too short', async () => {
-      const res = await request(app).post('/users').send({
+      const res = await request(app).post('/v1/users').send({
         username: 'newuser',
         name: 'New User',
         password: 'short',
@@ -154,7 +172,7 @@ describe('App (e2e)', () => {
     });
 
     it('normalizes the email to lowercase and trims whitespace before storing', async () => {
-      const res = await request(app).post('/users').send({
+      const res = await request(app).post('/v1/users').send({
         username: 'caseuser',
         name: 'Case User',
         password: 'password123456',
@@ -163,7 +181,7 @@ describe('App (e2e)', () => {
       expect(res.statusCode).toBe(201);
 
       const loginRes = await request(app)
-        .post('/login')
+        .post('/v1/login')
         .send({ username: 'caseuser', password: 'password123456' });
 
       expect(loginRes.body.user.email).toBe('caseuser@example.com');
@@ -172,7 +190,7 @@ describe('App (e2e)', () => {
     it('returns 409 when the username already exists', async () => {
       await createAndLoginUser('duplicateuser');
 
-      const res = await request(app).post('/users').send({
+      const res = await request(app).post('/v1/users').send({
         username: 'duplicateuser',
         name: 'Another User',
         password: 'password123456',
@@ -186,7 +204,7 @@ describe('App (e2e)', () => {
     it('returns 409 when the email already exists', async () => {
       await createAndLoginUser('emailowner');
 
-      const res = await request(app).post('/users').send({
+      const res = await request(app).post('/v1/users').send({
         username: 'someotherusername',
         name: 'Another User',
         password: 'password123456',
@@ -203,7 +221,7 @@ describe('App (e2e)', () => {
       await createAndLoginUser('loginuser');
 
       const res = await request(app)
-        .post('/login')
+        .post('/v1/login')
         .send({ username: 'loginuser', password: 'password123456' });
 
       expect(res.statusCode).toBe(200);
@@ -213,13 +231,14 @@ describe('App (e2e)', () => {
       expect(res.body.user).toMatchObject({
         username: 'loginuser',
         email: 'loginuser@example.com',
+        role: 'user',
       });
       expect(res.body.user).not.toHaveProperty('password');
     });
 
     it('returns 400 when username or password is missing', async () => {
       const res = await request(app)
-        .post('/login')
+        .post('/v1/login')
         .send({ username: 'loginuser' });
 
       expect(res.statusCode).toBe(400);
@@ -230,7 +249,7 @@ describe('App (e2e)', () => {
 
     it('returns 401 for an unknown username', async () => {
       const res = await request(app)
-        .post('/login')
+        .post('/v1/login')
         .send({ username: 'ghost', password: 'password123456' });
 
       expect(res.statusCode).toBe(401);
@@ -241,7 +260,7 @@ describe('App (e2e)', () => {
       await createAndLoginUser('loginuser');
 
       const res = await request(app)
-        .post('/login')
+        .post('/v1/login')
         .send({ username: 'loginuser', password: 'wrongpassword' });
 
       expect(res.statusCode).toBe(401);
@@ -254,7 +273,7 @@ describe('App (e2e)', () => {
       const { refreshToken } = await createAndLoginUser('refreshuser');
 
       const res = await request(app)
-        .post('/auth/refresh')
+        .post('/v1/auth/refresh')
         .send({ refreshToken });
 
       expect(res.statusCode).toBe(200);
@@ -269,11 +288,11 @@ describe('App (e2e)', () => {
       const { refreshToken, id } = await createAndLoginUser('refreshuser');
 
       const refreshRes = await request(app)
-        .post('/auth/refresh')
+        .post('/v1/auth/refresh')
         .send({ refreshToken });
 
       const profileRes = await request(app)
-        .get(`/users/profile/${id}`)
+        .get(`/v1/users/profile/${id}`)
         .set('Authorization', `Bearer ${refreshRes.body.accessToken}`);
 
       expect(profileRes.statusCode).toBe(200);
@@ -282,9 +301,9 @@ describe('App (e2e)', () => {
     it('rejects the old refresh token once it has been rotated (reuse detection)', async () => {
       const { refreshToken } = await createAndLoginUser('refreshuser');
 
-      await request(app).post('/auth/refresh').send({ refreshToken });
+      await request(app).post('/v1/auth/refresh').send({ refreshToken });
       const replayRes = await request(app)
-        .post('/auth/refresh')
+        .post('/v1/auth/refresh')
         .send({ refreshToken });
 
       expect(replayRes.statusCode).toBe(401);
@@ -292,7 +311,7 @@ describe('App (e2e)', () => {
     });
 
     it('returns 400 when the refresh token is missing', async () => {
-      const res = await request(app).post('/auth/refresh').send({});
+      const res = await request(app).post('/v1/auth/refresh').send({});
 
       expect(res.statusCode).toBe(400);
       expect(res.body).toEqual({ error: 'Refresh token is required.' });
@@ -300,7 +319,7 @@ describe('App (e2e)', () => {
 
     it('returns 401 for a malformed refresh token', async () => {
       const res = await request(app)
-        .post('/auth/refresh')
+        .post('/v1/auth/refresh')
         .send({ refreshToken: 'not-well-formed' });
 
       expect(res.statusCode).toBe(401);
@@ -309,7 +328,7 @@ describe('App (e2e)', () => {
 
     it('returns 401 for an unknown session', async () => {
       const res = await request(app)
-        .post('/auth/refresh')
+        .post('/v1/auth/refresh')
         .send({ refreshToken: 'unknown-session.some-validator' });
 
       expect(res.statusCode).toBe(401);
@@ -322,7 +341,7 @@ describe('App (e2e)', () => {
       const { accessToken } = await createAndLoginUser('logoutuser');
 
       const res = await request(app)
-        .post('/auth/logout')
+        .post('/v1/auth/logout')
         .set('Authorization', `Bearer ${accessToken}`);
 
       expect(res.statusCode).toBe(200);
@@ -330,7 +349,7 @@ describe('App (e2e)', () => {
     });
 
     it('returns 401 when the Authorization header is missing', async () => {
-      const res = await request(app).post('/auth/logout');
+      const res = await request(app).post('/v1/auth/logout');
 
       expect(res.statusCode).toBe(401);
       expect(res.body).toEqual({ error: 'Token missing' });
@@ -340,11 +359,11 @@ describe('App (e2e)', () => {
       const { accessToken, id } = await createAndLoginUser('logoutuser');
 
       await request(app)
-        .post('/auth/logout')
+        .post('/v1/auth/logout')
         .set('Authorization', `Bearer ${accessToken}`);
 
       const res = await request(app)
-        .get(`/users/profile/${id}`)
+        .get(`/v1/users/profile/${id}`)
         .set('Authorization', `Bearer ${accessToken}`);
 
       expect(res.statusCode).toBe(401);
@@ -356,11 +375,11 @@ describe('App (e2e)', () => {
         await createAndLoginUser('logoutuser');
 
       await request(app)
-        .post('/auth/logout')
+        .post('/v1/auth/logout')
         .set('Authorization', `Bearer ${accessToken}`);
 
       const res = await request(app)
-        .post('/auth/refresh')
+        .post('/v1/auth/refresh')
         .send({ refreshToken });
 
       expect(res.statusCode).toBe(401);
@@ -372,7 +391,7 @@ describe('App (e2e)', () => {
       const { accessToken, id } = await createAndLoginUser('profileuser');
 
       const res = await request(app)
-        .get(`/users/profile/${id}`)
+        .get(`/v1/users/profile/${id}`)
         .set('Authorization', `Bearer ${accessToken}`);
 
       expect(res.statusCode).toBe(200);
@@ -380,7 +399,7 @@ describe('App (e2e)', () => {
     });
 
     it('returns 401 when the Authorization header is missing', async () => {
-      const res = await request(app).get('/users/profile/some-id');
+      const res = await request(app).get('/v1/users/profile/some-id');
 
       expect(res.statusCode).toBe(401);
       expect(res.body).toEqual({ error: 'Token missing' });
@@ -388,7 +407,7 @@ describe('App (e2e)', () => {
 
     it('returns 401 for an invalid token', async () => {
       const res = await request(app)
-        .get('/users/profile/some-id')
+        .get('/v1/users/profile/some-id')
         .set('Authorization', 'Bearer not-a-real-token');
 
       expect(res.statusCode).toBe(401);
@@ -400,7 +419,7 @@ describe('App (e2e)', () => {
       const userB = await createAndLoginUser('userb');
 
       const res = await request(app)
-        .get(`/users/profile/${userB.id}`)
+        .get(`/v1/users/profile/${userB.id}`)
         .set('Authorization', `Bearer ${userA.accessToken}`);
 
       expect(res.statusCode).toBe(403);
@@ -417,7 +436,7 @@ describe('App (e2e)', () => {
       await testRedisClient.del(`user-${id}`);
 
       const res = await request(app)
-        .get(`/users/profile/${id}`)
+        .get(`/v1/users/profile/${id}`)
         .set('Authorization', `Bearer ${accessToken}`);
 
       expect(res.statusCode).toBe(200);
@@ -433,7 +452,7 @@ describe('App (e2e)', () => {
       await testPool.query('DELETE FROM users WHERE id = $1', [id]);
 
       const res = await request(app)
-        .get(`/users/profile/${id}`)
+        .get(`/v1/users/profile/${id}`)
         .set('Authorization', `Bearer ${accessToken}`);
 
       expect(res.statusCode).toBe(404);
@@ -447,7 +466,7 @@ describe('App (e2e)', () => {
       await testRedisClient.set(`user-${id}`, 'not-valid-json{');
 
       const res = await request(app)
-        .get(`/users/profile/${id}`)
+        .get(`/v1/users/profile/${id}`)
         .set('Authorization', `Bearer ${accessToken}`);
 
       expect(res.statusCode).toBe(200);
@@ -456,6 +475,71 @@ describe('App (e2e)', () => {
       await expect(testRedisClient.get(`user-${id}`)).resolves.toEqual(
         JSON.stringify(res.body)
       );
+    });
+  });
+
+  describe('GET /v1/admin/users', () => {
+    it('returns 401 when the Authorization header is missing', async () => {
+      const res = await request(app).get('/v1/admin/users');
+
+      expect(res.statusCode).toBe(401);
+      expect(res.body).toEqual({ error: 'Token missing' });
+    });
+
+    it('returns 403 for an authenticated regular user (RBAC enforcement)', async () => {
+      const { accessToken } = await createAndLoginUser('regularuser');
+
+      const res = await request(app)
+        .get('/v1/admin/users')
+        .set('Authorization', `Bearer ${accessToken}`);
+
+      expect(res.statusCode).toBe(403);
+      expect(res.body).toEqual({
+        error: 'You do not have access to this resource.',
+      });
+    });
+
+    it('returns a paginated list of users for an admin', async () => {
+      const admin = await createAndLoginAdmin('adminuser');
+      await createAndLoginUser('listeduser1');
+      await createAndLoginUser('listeduser2');
+
+      const res = await request(app)
+        .get('/v1/admin/users?limit=2&offset=0')
+        .set('Authorization', `Bearer ${admin.accessToken}`);
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.limit).toBe(2);
+      expect(res.body.offset).toBe(0);
+      expect(res.body.total).toBe(3); // admin + 2 regular users
+      expect(res.body.items).toHaveLength(2);
+      expect(res.body.items[0]).not.toHaveProperty('password');
+    });
+
+    it('returns 400 for an invalid pagination parameter', async () => {
+      const admin = await createAndLoginAdmin('adminuser2');
+
+      const res = await request(app)
+        .get('/v1/admin/users?limit=not-a-number')
+        .set('Authorization', `Bearer ${admin.accessToken}`);
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body).toEqual({ error: 'limit must be a number.' });
+    });
+
+    it("does not grant admin access via a token issued before the user's promotion", async () => {
+      const user = await createAndLoginUser('latepromote');
+      // Promote in PostgreSQL, but the already-issued access token's role
+      // claim is fixed for its lifetime — this is the documented trade-off.
+      await testPool.query("UPDATE users SET role = 'admin' WHERE id = $1", [
+        user.id,
+      ]);
+
+      const res = await request(app)
+        .get('/v1/admin/users')
+        .set('Authorization', `Bearer ${user.accessToken}`);
+
+      expect(res.statusCode).toBe(403);
     });
   });
 });

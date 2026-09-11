@@ -21,7 +21,7 @@ export function createAuthMiddleware(
       throw new UnauthorizedError('Invalid token');
     }
 
-    const { subject, sessionId } = tokenService.verifyAccessToken(token);
+    const { subject, sessionId, role } = tokenService.verifyAccessToken(token);
     const session = await sessionRepository.get(sessionId);
 
     if (!session) {
@@ -30,6 +30,7 @@ export function createAuthMiddleware(
 
     request.userId = subject;
     request.sessionId = sessionId;
+    request.userRole = role;
 
     next();
   });

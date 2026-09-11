@@ -6,37 +6,27 @@ import {
   createUsernameRateLimiter,
 } from '../../../middleware/rateLimiter';
 
-function buildApp(overrides: Parameters<typeof createLoginRateLimiter>[0]) {
+// createLoginRateLimiter is backed by RedisStore (see rateLimiter.ts), which
+// drives its counting via Lua scripts executed *by Redis* — not something a
+// unit-level mock can meaningfully emulate (RedisStore also initializes
+// those scripts eagerly, independent of `skip`). The "does it actually
+// count and block" behavior is covered by rateLimiter.integration.test.ts
+// against a real Redis instance; this unit suite only checks what's safe to
+// check without one — that `skip` keeps letting requests through even when
+// the store itself can't do anything useful with a fake Redis client.
+function buildApp(redisCall: jest.Mock) {
+  const redisClient = { call: redisCall } as unknown as Redis;
   const app: Express = express();
-  app.post('/login', createLoginRateLimiter(overrides), (_req, res) => {
+  app.post('/login', createLoginRateLimiter(redisClient), (_req, res) => {
     res.status(200).json({ ok: true });
   });
   return app;
 }
 
 describe('createLoginRateLimiter', () => {
-  it('allows requests under the limit', async () => {
-    const app = buildApp({ windowMs: 1000, max: 2, skip: () => false });
-
-    await request(app).post('/login').expect(200);
-    await request(app).post('/login').expect(200);
-  });
-
-  it('blocks requests over the limit with 429', async () => {
-    const app = buildApp({ windowMs: 1000, max: 2, skip: () => false });
-
-    await request(app).post('/login').expect(200);
-    await request(app).post('/login').expect(200);
-    const res = await request(app).post('/login');
-
-    expect(res.statusCode).toBe(429);
-    expect(res.body).toEqual({
-      error: 'Too many login attempts. Please try again later.',
-    });
-  });
-
   it('is skipped by default when NODE_ENV is test', async () => {
-    const app = buildApp({ windowMs: 1000, max: 1 });
+    const redisCall = jest.fn().mockResolvedValue(0);
+    const app = buildApp(redisCall);
 
     await request(app).post('/login').expect(200);
     await request(app).post('/login').expect(200);

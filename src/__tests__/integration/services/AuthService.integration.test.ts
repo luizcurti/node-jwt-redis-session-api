@@ -78,6 +78,30 @@ describe('AuthService (integration)', () => {
     expect(cached).toEqual(result.user);
   });
 
+  it('carries the real role from PostgreSQL into the access token and session', async () => {
+    // No self-service path promotes a user to admin — this simulates the
+    // manual bootstrap step (see README) directly against the database.
+    await testPool.query(
+      "UPDATE users SET role = 'admin' WHERE username = $1",
+      ['integrationuser']
+    );
+
+    const result = await authService.login({
+      username: 'integrationuser',
+      password: 'password123456',
+    });
+
+    expect(result.user.role).toBe('admin');
+
+    const { role, sessionId } = tokenService.verifyAccessToken(
+      result.accessToken
+    );
+    expect(role).toBe('admin');
+
+    const session = await sessionRepository.get(sessionId);
+    expect(session?.role).toBe('admin');
+  });
+
   describe('refresh', () => {
     it('rotates the refresh token and rejects the old one on reuse', async () => {
       const { refreshToken } = await authService.login({
@@ -113,6 +137,26 @@ describe('AuthService (integration)', () => {
       await expect(
         authService.refresh('unknown-session.some-validator')
       ).rejects.toThrow(UnauthorizedError);
+    });
+
+    it('carries the role forward from the session, not a fresh PostgreSQL lookup', async () => {
+      const { refreshToken } = await authService.login({
+        username: 'integrationuser',
+        password: 'password123456',
+      });
+
+      // Promote to admin *after* the session was already created — refresh
+      // must not silently pick this up mid-session; that's the documented
+      // trade-off (role changes take effect on the next login).
+      await testPool.query(
+        "UPDATE users SET role = 'admin' WHERE username = $1",
+        ['integrationuser']
+      );
+
+      const rotated = await authService.refresh(refreshToken);
+      const { role } = tokenService.verifyAccessToken(rotated.accessToken);
+
+      expect(role).toBe('user');
     });
   });
 

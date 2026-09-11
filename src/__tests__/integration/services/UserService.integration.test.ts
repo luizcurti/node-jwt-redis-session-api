@@ -77,6 +77,7 @@ describe('UserService (integration)', () => {
       name: 'Test User',
       username: 'integrationuser',
       email: 'integration@example.com',
+      role: 'user' as const,
     };
     await cacheRepository.setUserProfile(NON_EXISTENT_ID, profile);
 
@@ -99,7 +100,48 @@ describe('UserService (integration)', () => {
       id,
       username: 'readthroughuser',
       email: 'readthrough@example.com',
+      role: 'user',
     });
     await expect(cacheRepository.getUserProfile(id)).resolves.toEqual(profile);
+  });
+
+  describe('listUsers', () => {
+    it('paginates real rows from PostgreSQL', async () => {
+      await service.createUser({
+        username: 'listuser1',
+        name: 'List User 1',
+        password: 'password123456',
+        email: 'listuser1@example.com',
+      });
+      await service.createUser({
+        username: 'listuser2',
+        name: 'List User 2',
+        password: 'password123456',
+        email: 'listuser2@example.com',
+      });
+
+      const firstPage = await service.listUsers({ limit: '1', offset: '0' });
+      expect(firstPage.items).toHaveLength(1);
+      expect(firstPage.total).toBe(2);
+      expect(firstPage.limit).toBe(1);
+      expect(firstPage.offset).toBe(0);
+
+      const secondPage = await service.listUsers({ limit: '1', offset: '1' });
+      expect(secondPage.items).toHaveLength(1);
+      expect(secondPage.items[0].id).not.toBe(firstPage.items[0].id);
+    });
+
+    it('never returns the password hash', async () => {
+      await service.createUser({
+        username: 'listuser3',
+        name: 'List User 3',
+        password: 'password123456',
+        email: 'listuser3@example.com',
+      });
+
+      const { items } = await service.listUsers({});
+
+      expect(items[0]).not.toHaveProperty('password');
+    });
   });
 });

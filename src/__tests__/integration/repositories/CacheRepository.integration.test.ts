@@ -26,6 +26,7 @@ describe('CacheRepository (integration)', () => {
       name: 'Test User',
       username: 'testuser',
       email: 'test@example.com',
+      role: 'user' as const,
     };
 
     await repository.setUserProfile('user-1', profile);
@@ -39,6 +40,7 @@ describe('CacheRepository (integration)', () => {
       name: 'Test User',
       username: 'testuser',
       email: 'test@example.com',
+      role: 'user' as const,
     };
 
     await repository.setUserProfile('user-1', profile, 120);

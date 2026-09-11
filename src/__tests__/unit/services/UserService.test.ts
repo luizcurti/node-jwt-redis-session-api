@@ -22,6 +22,7 @@ describe('UserService', () => {
       | 'create'
       | 'findByUsername'
       | 'findById'
+      | 'listPaginated'
     >
   >;
   let cacheRepository: jest.Mocked<
@@ -36,6 +37,7 @@ describe('UserService', () => {
       create: jest.fn(),
       findByUsername: jest.fn(),
       findById: jest.fn(),
+      listPaginated: jest.fn(),
     };
     cacheRepository = {
       getUserProfile: jest.fn(),
@@ -144,6 +146,7 @@ describe('UserService', () => {
       name: 'Test',
       username: 'testuser',
       email: 'test@example.com',
+      role: 'user' as const,
     };
     const storedUser = { ...profile, password: 'hashed-password' };
 
@@ -220,6 +223,72 @@ describe('UserService', () => {
       expect(loggerErrorSpy).toHaveBeenCalled();
 
       loggerErrorSpy.mockRestore();
+    });
+  });
+
+  describe('listUsers', () => {
+    const storedUser = {
+      id: 'user-a',
+      name: 'Test',
+      username: 'testuser',
+      email: 'test@example.com',
+      password: 'hashed-password',
+      role: 'user' as const,
+    };
+
+    it('applies default limit/offset when the query is empty', async () => {
+      userRepository.listPaginated.mockResolvedValueOnce({
+        items: [storedUser],
+        total: 1,
+      });
+
+      const result = await service.listUsers({});
+
+      expect(userRepository.listPaginated).toHaveBeenCalledWith(20, 0);
+      expect(result).toEqual({
+        items: [
+          {
+            id: 'user-a',
+            name: 'Test',
+            username: 'testuser',
+            email: 'test@example.com',
+            role: 'user',
+          },
+        ],
+        total: 1,
+        limit: 20,
+        offset: 0,
+      });
+    });
+
+    it('coerces and applies limit/offset from query strings', async () => {
+      userRepository.listPaginated.mockResolvedValueOnce({
+        items: [],
+        total: 0,
+      });
+
+      await service.listUsers({ limit: '5', offset: '10' });
+
+      expect(userRepository.listPaginated).toHaveBeenCalledWith(5, 10);
+    });
+
+    it('throws ValidationError when limit exceeds the maximum', async () => {
+      await expect(service.listUsers({ limit: '500' })).rejects.toThrow(
+        'limit must be at most 100.'
+      );
+      expect(userRepository.listPaginated).not.toHaveBeenCalled();
+    });
+
+    it('throws ValidationError for a non-numeric limit', async () => {
+      await expect(service.listUsers({ limit: 'abc' })).rejects.toThrow(
+        'limit must be a number.'
+      );
+    });
+
+    it('throws ValidationError for a negative offset', async () => {
+      await expect(service.listUsers({ offset: '-1' })).rejects.toThrow(
+        'offset must be at least 0.'
+      );
     });
   });
 });

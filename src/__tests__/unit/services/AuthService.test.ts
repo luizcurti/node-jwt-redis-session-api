@@ -35,10 +35,12 @@ describe('AuthService', () => {
     username: 'testuser',
     password: 'hashed-password',
     email: 'test@example.com',
+    role: 'user' as const,
   };
 
   const storedSession = {
     userId: 'user-1',
+    role: 'user' as const,
     refreshTokenHash: 'stored-hash',
     createdAt: 1000,
     expiresAt: 2000,
@@ -123,6 +125,7 @@ describe('AuthService', () => {
         name: 'Test User',
         username: 'testuser',
         email: 'test@example.com',
+        role: 'user',
       });
       expect(sessionRepository.set).toHaveBeenCalledWith(
         expect.any(String),
@@ -212,7 +215,8 @@ describe('AuthService', () => {
       expect(result.refreshToken).toBe('session-1.new-validator');
       expect(tokenService.signAccessToken).toHaveBeenCalledWith(
         'user-1',
-        'session-1'
+        'session-1',
+        'user'
       );
       expect(sessionRepository.set).toHaveBeenCalledWith(
         'session-1',

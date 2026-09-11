@@ -2,7 +2,7 @@
 	"info": {
 		"_postman_id": "9548a068-b36f-4752-b2a0-721d806a8789",
 		"name": "Node Redis API",
-		"description": "Collection of endpoints for the Node.js app with Redis. Covers the happy path and the sad path (validation, auth, ownership, refresh-rotation/reuse-detection, and logout-revocation errors) for every endpoint. Run with newman: `npm run test:collection`.\n\nNote: the 404 \"user not found\" case is intentionally not covered here — GET /users/profile/:id is a true read-through cache (a Redis miss falls back to PostgreSQL), so reaching a 404 requires deleting the user from PostgreSQL directly, which is out of reach for a black-box HTTP collection. It is covered by the Jest e2e suite instead.",
+		"description": "Collection of endpoints for the Node.js app with Redis. Covers the happy path and the sad path (validation, auth, ownership, refresh-rotation/reuse-detection, logout-revocation, and RBAC errors) for every endpoint. Run with newman: `npm run test:collection`.\n\nNote: two happy-path cases are intentionally not covered here, both because they require reaching into the database directly, which is out of reach for a black-box HTTP collection — covered by the Jest e2e suite instead:\n- The 404 \"user not found\" case on GET /users/profile/:id (a true read-through cache; reaching it requires deleting the user from PostgreSQL directly).\n- The 200 happy path on GET /admin/users (there is no self-service way to become an admin — see the README's \"Roles & Access Control\" section — so only the 401/403 sad paths are covered here).",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
 		"_exporter_id": "43702418"
 	},
@@ -143,7 +143,7 @@
 					"raw": "{\n    \"name\": \"New User\",\n    \"username\": \"{{username}}\",\n    \"email\": \"{{username}}@example.com\",\n    \"password\": \"newpassword123\"\n}",
 					"options": { "raw": { "language": "json" } }
 				},
-				"url": { "raw": "{{baseUrl}}/users", "host": ["{{baseUrl}}"], "path": ["users"] }
+				"url": { "raw": "{{baseUrl}}/v1/users", "host": ["{{baseUrl}}"], "path": ["v1", "users"] }
 			},
 			"response": []
 		},
@@ -171,7 +171,7 @@
 					"raw": "{\n    \"username\": \"incomplete\"\n}",
 					"options": { "raw": { "language": "json" } }
 				},
-				"url": { "raw": "{{baseUrl}}/users", "host": ["{{baseUrl}}"], "path": ["users"] }
+				"url": { "raw": "{{baseUrl}}/v1/users", "host": ["{{baseUrl}}"], "path": ["v1", "users"] }
 			},
 			"response": []
 		},
@@ -199,7 +199,7 @@
 					"raw": "{\n    \"name\": \"New User\",\n    \"username\": \"ab\",\n    \"email\": \"shortname@example.com\",\n    \"password\": \"newpassword123\"\n}",
 					"options": { "raw": { "language": "json" } }
 				},
-				"url": { "raw": "{{baseUrl}}/users", "host": ["{{baseUrl}}"], "path": ["users"] }
+				"url": { "raw": "{{baseUrl}}/v1/users", "host": ["{{baseUrl}}"], "path": ["v1", "users"] }
 			},
 			"response": []
 		},
@@ -227,7 +227,7 @@
 					"raw": "{\n    \"name\": \"New User\",\n    \"username\": \"invalidemailuser\",\n    \"email\": \"not-an-email\",\n    \"password\": \"newpassword123\"\n}",
 					"options": { "raw": { "language": "json" } }
 				},
-				"url": { "raw": "{{baseUrl}}/users", "host": ["{{baseUrl}}"], "path": ["users"] }
+				"url": { "raw": "{{baseUrl}}/v1/users", "host": ["{{baseUrl}}"], "path": ["v1", "users"] }
 			},
 			"response": []
 		},
@@ -255,7 +255,7 @@
 					"raw": "{\n    \"name\": \"New User\",\n    \"username\": \"shortpassuser\",\n    \"email\": \"shortpass@example.com\",\n    \"password\": \"short\"\n}",
 					"options": { "raw": { "language": "json" } }
 				},
-				"url": { "raw": "{{baseUrl}}/users", "host": ["{{baseUrl}}"], "path": ["users"] }
+				"url": { "raw": "{{baseUrl}}/v1/users", "host": ["{{baseUrl}}"], "path": ["v1", "users"] }
 			},
 			"response": []
 		},
@@ -283,7 +283,7 @@
 					"raw": "{\n    \"name\": \"Another User\",\n    \"username\": \"{{username}}\",\n    \"email\": \"another_{{username}}@example.com\",\n    \"password\": \"newpassword123\"\n}",
 					"options": { "raw": { "language": "json" } }
 				},
-				"url": { "raw": "{{baseUrl}}/users", "host": ["{{baseUrl}}"], "path": ["users"] }
+				"url": { "raw": "{{baseUrl}}/v1/users", "host": ["{{baseUrl}}"], "path": ["v1", "users"] }
 			},
 			"response": []
 		},
@@ -311,7 +311,7 @@
 					"raw": "{\n    \"name\": \"Another User\",\n    \"username\": \"another_{{username}}\",\n    \"email\": \"{{username}}@example.com\",\n    \"password\": \"newpassword123\"\n}",
 					"options": { "raw": { "language": "json" } }
 				},
-				"url": { "raw": "{{baseUrl}}/users", "host": ["{{baseUrl}}"], "path": ["users"] }
+				"url": { "raw": "{{baseUrl}}/v1/users", "host": ["{{baseUrl}}"], "path": ["v1", "users"] }
 			},
 			"response": []
 		},
@@ -339,7 +339,7 @@
 					"raw": "{\n    \"username\": \"{{username}}\"\n}",
 					"options": { "raw": { "language": "json" } }
 				},
-				"url": { "raw": "{{baseUrl}}/login", "host": ["{{baseUrl}}"], "path": ["login"] }
+				"url": { "raw": "{{baseUrl}}/v1/login", "host": ["{{baseUrl}}"], "path": ["v1", "login"] }
 			},
 			"response": []
 		},
@@ -367,7 +367,7 @@
 					"raw": "{\n    \"username\": \"{{username}}\",\n    \"password\": \"wrongpassword\"\n}",
 					"options": { "raw": { "language": "json" } }
 				},
-				"url": { "raw": "{{baseUrl}}/login", "host": ["{{baseUrl}}"], "path": ["login"] }
+				"url": { "raw": "{{baseUrl}}/v1/login", "host": ["{{baseUrl}}"], "path": ["v1", "login"] }
 			},
 			"response": []
 		},
@@ -403,7 +403,7 @@
 					"raw": "{\n    \"username\": \"{{username}}\",\n    \"password\": \"newpassword123\"\n}",
 					"options": { "raw": { "language": "json" } }
 				},
-				"url": { "raw": "{{baseUrl}}/login", "host": ["{{baseUrl}}"], "path": ["login"] }
+				"url": { "raw": "{{baseUrl}}/v1/login", "host": ["{{baseUrl}}"], "path": ["v1", "login"] }
 			},
 			"response": []
 		},
@@ -427,9 +427,9 @@
 				"method": "GET",
 				"header": [],
 				"url": {
-					"raw": "{{baseUrl}}/users/profile/{{userId}}",
+					"raw": "{{baseUrl}}/v1/users/profile/{{userId}}",
 					"host": ["{{baseUrl}}"],
-					"path": ["users", "profile", "{{userId}}"]
+					"path": ["v1", "users", "profile", "{{userId}}"]
 				}
 			},
 			"response": []
@@ -458,9 +458,9 @@
 					"bearer": [{ "key": "token", "value": "not-a-real-token", "type": "string" }]
 				},
 				"url": {
-					"raw": "{{baseUrl}}/users/profile/{{userId}}",
+					"raw": "{{baseUrl}}/v1/users/profile/{{userId}}",
 					"host": ["{{baseUrl}}"],
-					"path": ["users", "profile", "{{userId}}"]
+					"path": ["v1", "users", "profile", "{{userId}}"]
 				}
 			},
 			"response": []
@@ -489,9 +489,9 @@
 					"bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
 				},
 				"url": {
-					"raw": "{{baseUrl}}/users/profile/00000000-0000-0000-0000-000000000000",
+					"raw": "{{baseUrl}}/v1/users/profile/00000000-0000-0000-0000-000000000000",
 					"host": ["{{baseUrl}}"],
-					"path": ["users", "profile", "00000000-0000-0000-0000-000000000000"]
+					"path": ["v1", "users", "profile", "00000000-0000-0000-0000-000000000000"]
 				}
 			},
 			"response": []
@@ -522,9 +522,67 @@
 					"bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
 				},
 				"url": {
-					"raw": "{{baseUrl}}/users/profile/{{userId}}",
+					"raw": "{{baseUrl}}/v1/users/profile/{{userId}}",
 					"host": ["{{baseUrl}}"],
-					"path": ["users", "profile", "{{userId}}"]
+					"path": ["v1", "users", "profile", "{{userId}}"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "List Users (admin) - missing token (sad path)",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"type": "text/javascript",
+						"exec": [
+							"pm.test('status is 401', () => pm.response.to.have.status(401));",
+							"pm.test('reports missing token', () => {",
+							"    pm.expect(pm.response.json()).to.eql({ error: 'Token missing' });",
+							"});"
+						]
+					}
+				}
+			],
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{baseUrl}}/v1/admin/users",
+					"host": ["{{baseUrl}}"],
+					"path": ["v1", "admin", "users"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "List Users (admin) - forbidden for a regular user (sad path)",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"type": "text/javascript",
+						"exec": [
+							"pm.test('status is 403', () => pm.response.to.have.status(403));",
+							"pm.test('reports the RBAC violation', () => {",
+							"    pm.expect(pm.response.json()).to.eql({ error: 'You do not have access to this resource.' });",
+							"});"
+						]
+					}
+				}
+			],
+			"request": {
+				"method": "GET",
+				"header": [],
+				"auth": {
+					"type": "bearer",
+					"bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+				},
+				"url": {
+					"raw": "{{baseUrl}}/v1/admin/users",
+					"host": ["{{baseUrl}}"],
+					"path": ["v1", "admin", "users"]
 				}
 			},
 			"response": []
@@ -550,9 +608,9 @@
 				"header": [{ "key": "Content-Type", "value": "application/json" }],
 				"body": { "mode": "raw", "raw": "{}", "options": { "raw": { "language": "json" } } },
 				"url": {
-					"raw": "{{baseUrl}}/auth/refresh",
+					"raw": "{{baseUrl}}/v1/auth/refresh",
 					"host": ["{{baseUrl}}"],
-					"path": ["auth", "refresh"]
+					"path": ["v1", "auth", "refresh"]
 				}
 			},
 			"response": []
@@ -582,9 +640,9 @@
 					"options": { "raw": { "language": "json" } }
 				},
 				"url": {
-					"raw": "{{baseUrl}}/auth/refresh",
+					"raw": "{{baseUrl}}/v1/auth/refresh",
 					"host": ["{{baseUrl}}"],
-					"path": ["auth", "refresh"]
+					"path": ["v1", "auth", "refresh"]
 				}
 			},
 			"response": []
@@ -629,9 +687,9 @@
 					"options": { "raw": { "language": "json" } }
 				},
 				"url": {
-					"raw": "{{baseUrl}}/auth/refresh",
+					"raw": "{{baseUrl}}/v1/auth/refresh",
 					"host": ["{{baseUrl}}"],
-					"path": ["auth", "refresh"]
+					"path": ["v1", "auth", "refresh"]
 				}
 			},
 			"response": []
@@ -656,9 +714,9 @@
 				"method": "POST",
 				"header": [],
 				"url": {
-					"raw": "{{baseUrl}}/auth/logout",
+					"raw": "{{baseUrl}}/v1/auth/logout",
 					"host": ["{{baseUrl}}"],
-					"path": ["auth", "logout"]
+					"path": ["v1", "auth", "logout"]
 				}
 			},
 			"response": []
@@ -687,9 +745,9 @@
 					"bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
 				},
 				"url": {
-					"raw": "{{baseUrl}}/auth/logout",
+					"raw": "{{baseUrl}}/v1/auth/logout",
 					"host": ["{{baseUrl}}"],
-					"path": ["auth", "logout"]
+					"path": ["v1", "auth", "logout"]
 				}
 			},
 			"response": []
@@ -718,9 +776,9 @@
 					"bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
 				},
 				"url": {
-					"raw": "{{baseUrl}}/users/profile/{{userId}}",
+					"raw": "{{baseUrl}}/v1/users/profile/{{userId}}",
 					"host": ["{{baseUrl}}"],
-					"path": ["users", "profile", "{{userId}}"]
+					"path": ["v1", "users", "profile", "{{userId}}"]
 				}
 			},
 			"response": []
@@ -750,9 +808,9 @@
 					"options": { "raw": { "language": "json" } }
 				},
 				"url": {
-					"raw": "{{baseUrl}}/auth/refresh",
+					"raw": "{{baseUrl}}/v1/auth/refresh",
 					"host": ["{{baseUrl}}"],
-					"path": ["auth", "refresh"]
+					"path": ["v1", "auth", "refresh"]
 				}
 			},
 			"response": []

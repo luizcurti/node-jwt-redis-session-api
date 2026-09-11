@@ -17,6 +17,7 @@ describe('CacheRepository', () => {
         name: 'Test',
         username: 'testuser',
         email: 'test@example.com',
+        role: 'user' as const,
       };
       redisClient.get.mockResolvedValueOnce(JSON.stringify(profile));
 
@@ -48,6 +49,7 @@ describe('CacheRepository', () => {
         name: 'Test',
         username: 'testuser',
         email: 'test@example.com',
+        role: 'user' as const,
       };
 
       await repository.setUserProfile('1', profile);
@@ -66,6 +68,7 @@ describe('CacheRepository', () => {
         name: 'Test',
         username: 'testuser',
         email: 'test@example.com',
+        role: 'user' as const,
       };
 
       await repository.setUserProfile('1', profile, 60);

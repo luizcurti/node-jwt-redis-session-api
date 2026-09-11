@@ -95,6 +95,47 @@ describe('UserRepository', () => {
     });
   });
 
+  describe('listPaginated', () => {
+    it('returns items and total from two parallel queries', async () => {
+      const users = [
+        {
+          id: '1',
+          name: 'Test',
+          username: 'testuser',
+          password: 'hash',
+          email: 'test@example.com',
+          role: 'user',
+        },
+      ];
+      pool.query
+        .mockResolvedValueOnce({ rows: users })
+        .mockResolvedValueOnce({ rows: [{ count: '1' }] });
+
+      const result = await repository.listPaginated(20, 0);
+
+      expect(pool.query).toHaveBeenNthCalledWith(
+        1,
+        expect.stringContaining('LIMIT $1 OFFSET $2'),
+        [20, 0]
+      );
+      expect(pool.query).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('COUNT(*)')
+      );
+      expect(result).toEqual({ items: users, total: 1 });
+    });
+
+    it('returns an empty page when there are no users', async () => {
+      pool.query
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [{ count: '0' }] });
+
+      const result = await repository.listPaginated(20, 0);
+
+      expect(result).toEqual({ items: [], total: 0 });
+    });
+  });
+
   describe('create', () => {
     it('inserts the user with the given fields', async () => {
       pool.query.mockResolvedValueOnce({ rows: [] });

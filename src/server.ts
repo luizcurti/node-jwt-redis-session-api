@@ -67,7 +67,10 @@ app.get('/ready', async (req, res) => {
 
 app.use('/docs', swaggerUi.serve, swaggerUi.setup(openapiSpec));
 
-app.use(router);
+// Versioned API surface. /, /health, /ready, and /docs stay unversioned —
+// they're infra/meta endpoints, not part of the business API contract that
+// a version bump would ever need to change independently of.
+app.use('/v1', router);
 app.use(errorHandler);
 
 const PORT = process.env.NODE_ENV === 'test' ? 0 : process.env.PORT || 3000;

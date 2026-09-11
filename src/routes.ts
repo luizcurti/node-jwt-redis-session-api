@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { CreateUserController } from './controllers/CreateUserController';
 import { GetUserInfoController } from './controllers/GetUserInfoController';
+import { ListUsersController } from './controllers/ListUsersController';
 import { LoginUserController } from './controllers/LoginUserController';
 import { LogoutController } from './controllers/LogoutController';
 import { RefreshTokenController } from './controllers/RefreshTokenController';
@@ -9,6 +10,7 @@ import {
   createLoginRateLimiter,
   createUsernameRateLimiter,
 } from './middleware/rateLimiter';
+import { requireRole } from './middleware/rbac';
 import { pool } from './postgres';
 import { redisClient } from './redisConfig';
 import { CacheRepository } from './repositories/CacheRepository';
@@ -36,16 +38,22 @@ const loginUserController = new LoginUserController(authService);
 const refreshTokenController = new RefreshTokenController(authService);
 const logoutController = new LogoutController(authService);
 const getUserInfoController = new GetUserInfoController(userService);
+const listUsersController = new ListUsersController(userService);
 const authentication = createAuthMiddleware(tokenService, sessionRepository);
-const loginRateLimiter = createLoginRateLimiter();
+const requireAdmin = requireRole('admin');
+const loginRateLimiter = createLoginRateLimiter(redisClient);
 const usernameRateLimiter = createUsernameRateLimiter(redisClient);
-const refreshRateLimiter = createLoginRateLimiter({
-  handler: (_request, response) => {
-    response
-      .status(429)
-      .json({ error: 'Too many refresh attempts. Please try again later.' });
+const refreshRateLimiter = createLoginRateLimiter(
+  redisClient,
+  {
+    handler: (_request, response) => {
+      response
+        .status(429)
+        .json({ error: 'Too many refresh attempts. Please try again later.' });
+    },
   },
-});
+  'rl:ip:refresh:'
+);
 
 const router = Router();
 
@@ -59,5 +67,11 @@ router.post(
 router.post('/auth/refresh', refreshRateLimiter, refreshTokenController.handle);
 router.post('/auth/logout', authentication, logoutController.handle);
 router.get('/users/profile/:id', authentication, getUserInfoController.handle);
+router.get(
+  '/admin/users',
+  authentication,
+  requireAdmin,
+  listUsersController.handle
+);
 
 export default router;

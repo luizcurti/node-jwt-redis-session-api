@@ -17,6 +17,8 @@ const BCRYPT_SALT_ROUNDS = 12;
 // hash identically regardless of what follows, so it's rejected outright
 // instead of quietly ignored.
 const MAX_PASSWORD_LENGTH = 72;
+const DEFAULT_PAGE_LIMIT = 20;
+const MAX_PAGE_LIMIT = 100;
 
 const createUserSchema = z.object({
   username: z
@@ -44,6 +46,29 @@ const createUserSchema = z.object({
 });
 
 export type CreateUserInput = z.infer<typeof createUserSchema>;
+
+const listUsersQuerySchema = z.object({
+  limit: z.coerce
+    .number({ error: 'limit must be a number.' })
+    .int('limit must be an integer.')
+    .min(1, 'limit must be at least 1.')
+    .max(MAX_PAGE_LIMIT, `limit must be at most ${MAX_PAGE_LIMIT}.`)
+    .optional()
+    .default(DEFAULT_PAGE_LIMIT),
+  offset: z.coerce
+    .number({ error: 'offset must be a number.' })
+    .int('offset must be an integer.')
+    .min(0, 'offset must be at least 0.')
+    .optional()
+    .default(0),
+});
+
+export type ListUsersResult = {
+  items: UserPublic[];
+  total: number;
+  limit: number;
+  offset: number;
+};
 
 export class UserService {
   constructor(
@@ -115,6 +140,17 @@ export class UserService {
     }
 
     return profile;
+  }
+
+  async listUsers(rawQuery: unknown): Promise<ListUsersResult> {
+    const { limit, offset } = parseOrThrow(listUsersQuerySchema, rawQuery);
+
+    const { items, total } = await this.userRepository.listPaginated(
+      limit,
+      offset
+    );
+
+    return { items: items.map(toPublicUser), total, limit, offset };
   }
 
   private async readCachedProfile(userId: string): Promise<UserPublic | null> {

@@ -34,6 +34,7 @@ describe('UserRepository (integration)', () => {
       username: 'integrationuser',
       password: 'hashed-password',
       email: 'integration@example.com',
+      role: 'user',
     });
   });
 
@@ -171,5 +172,54 @@ describe('UserRepository (integration)', () => {
     expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(
       ConflictError
     );
+  });
+
+  it('always defaults a newly created user to the "user" role, regardless of what create() is given', async () => {
+    // NewUser has no `role` field at all — there is no code path through
+    // this repository that lets a caller (or, transitively, a public
+    // signup request body) assign a role at creation time. This is what
+    // makes that structurally true, not just validated away.
+    await repository.create({
+      id: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+      name: 'Default Role User',
+      username: 'defaultroleuser',
+      passwordHash: 'hashed-password',
+      email: 'defaultrole@example.com',
+    });
+
+    const found = await repository.findByUsername('defaultroleuser');
+
+    expect(found?.role).toBe('user');
+  });
+
+  describe('listPaginated', () => {
+    it('paginates and counts real rows', async () => {
+      await repository.create({
+        id: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
+        name: 'Page User 1',
+        username: 'pageuser1',
+        passwordHash: 'hashed-password',
+        email: 'pageuser1@example.com',
+      });
+      await repository.create({
+        id: 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',
+        name: 'Page User 2',
+        username: 'pageuser2',
+        passwordHash: 'hashed-password',
+        email: 'pageuser2@example.com',
+      });
+
+      const firstPage = await repository.listPaginated(1, 0);
+      expect(firstPage.items).toHaveLength(1);
+      expect(firstPage.total).toBe(2);
+
+      const secondPage = await repository.listPaginated(1, 1);
+      expect(secondPage.items).toHaveLength(1);
+      expect(secondPage.items[0].id).not.toBe(firstPage.items[0].id);
+
+      const emptyPage = await repository.listPaginated(1, 2);
+      expect(emptyPage.items).toHaveLength(0);
+      expect(emptyPage.total).toBe(2);
+    });
   });
 });

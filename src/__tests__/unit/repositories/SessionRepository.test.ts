@@ -10,6 +10,7 @@ describe('SessionRepository', () => {
 
   const record = {
     userId: 'user-1',
+    role: 'user' as const,
     refreshTokenHash: 'hash',
     createdAt: 1000,
     expiresAt: 2000,

@@ -1,0 +1,46 @@
+sequenceDiagram
+    actor Client
+    participant Controller as LoginUserController
+    participant Service as AuthService
+    participant Repo as UserRepository
+    participant DB as PostgreSQL
+    participant Session as SessionRepository
+    participant Token as TokenService
+    participant Cache as CacheRepository
+    participant Redis
+
+    Client->>Controller: POST /v1/login {username, password}
+
+    alt missing username or password
+        Controller->>Service: login(input)
+        Service-->>Controller: throws ValidationError
+        Controller-->>Client: 400 Username and password are required.
+    else unknown username or wrong password
+        Controller->>Service: login(input)
+        Service->>Repo: findByUsername(username)
+        Repo->>DB: SELECT ... WHERE username = $1
+        DB-->>Repo: no rows, or a row that fails bcrypt.compare
+        Repo-->>Service: null / mismatched hash
+        Service-->>Controller: throws UnauthorizedError
+        Controller-->>Client: 401 Invalid credentials.
+    else happy path
+        Controller->>Service: login(input)
+        Service->>Repo: findByUsername(username)
+        Repo->>DB: SELECT ... WHERE username = $1
+        DB-->>Repo: user row (incl. role)
+        Repo-->>Service: user
+        Service->>Service: bcrypt.compare(password, user.password) = true
+        Service->>Service: sessionId = randomUUID()
+        Service->>Token: generateRefreshToken()
+        Token-->>Service: { validator, hash }
+        Service->>Session: set(sessionId, { userId, role, refreshTokenHash, createdAt, expiresAt })
+        Session->>Redis: SET session:{sessionId} EX 7d
+        Redis-->>Session: OK
+        Service->>Token: signAccessToken(userId, sessionId, role)
+        Token-->>Service: accessToken (JWT, 15m, iss/aud)
+        Service->>Cache: setUserProfile(user.id, publicUser)
+        Cache->>Redis: SET user-{id} EX 1h
+        Redis-->>Cache: OK
+        Service-->>Controller: { accessToken, refreshToken, user }
+        Controller-->>Client: 200 { message, accessToken, refreshToken, user }
+    end

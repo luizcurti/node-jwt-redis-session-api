@@ -1,0 +1,24 @@
+version: 2
+updates:
+  - package-ecosystem: 'npm'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+    groups:
+      # devDependencies churn constantly and are low-risk (build/test tooling,
+      # not shipped code) — batch them into one PR/week instead of one per
+      # package. Production dependencies stay ungrouped so each gets its own
+      # PR with a diffable changelog for review.
+      dev-dependencies:
+        dependency-type: 'development'
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: 'docker'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'weekly'

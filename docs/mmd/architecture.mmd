@@ -1,0 +1,72 @@
+flowchart TD
+    Client([Client])
+
+    subgraph App["Node.js / Express app"]
+        Router["Express Router\n(composition root: routes.ts)\nmounted under /v1"]
+        ApiLimiter["apiRateLimiter\n(100 req/min per IP, every /v1 route)"]
+        Auth["auth middleware\n(createAuthMiddleware)"]
+        Rbac["requireRole('admin')"]
+        ErrorHandler["errorHandler middleware"]
+
+        subgraph Controllers["Controllers (thin HTTP layer)"]
+            CreateUserController
+            LoginUserController
+            RefreshTokenController
+            LogoutController
+            GetUserInfoController
+            ListUsersController
+        end
+
+        subgraph Services["Services (business rules)"]
+            UserService
+            AuthService
+            TokenService
+        end
+
+        subgraph Repositories["Repositories (data access)"]
+            UserRepository
+            CacheRepository
+            SessionRepository
+        end
+    end
+
+    Postgres[(PostgreSQL\nusers table)]
+    Redis[(Redis)]
+
+    Client -->|"POST /v1/users"| Router
+    Client -->|"POST /v1/login"| Router
+    Client -->|"POST /v1/auth/refresh"| Router
+    Client -->|"POST /v1/auth/logout"| Router
+    Client -->|"GET /v1/users/profile/:id"| Router
+    Client -->|"GET /v1/admin/users"| Router
+
+    Router --> ApiLimiter
+    ApiLimiter --> CreateUserController
+    ApiLimiter -->|"+ own rate limit"| LoginUserController
+    ApiLimiter -->|"+ own rate limit"| RefreshTokenController
+    ApiLimiter -->|"authenticate"| Auth --> LogoutController
+    Auth --> GetUserInfoController
+    Auth --> Rbac --> ListUsersController
+
+    CreateUserController --> UserService
+    LoginUserController --> AuthService
+    RefreshTokenController --> AuthService
+    LogoutController --> AuthService
+    GetUserInfoController --> UserService
+    ListUsersController --> UserService
+
+    UserService --> UserRepository
+    UserService --> CacheRepository
+    AuthService --> UserRepository
+    AuthService --> CacheRepository
+    AuthService --> SessionRepository
+    AuthService --> TokenService
+    Auth --> TokenService
+    Auth --> SessionRepository
+
+    UserRepository --> Postgres
+    CacheRepository -->|"profile cache"| Redis
+    SessionRepository -->|"session store"| Redis
+
+    Controllers -.->|"next(error)"| ErrorHandler
+    ErrorHandler -.->|"JSON error response"| Client

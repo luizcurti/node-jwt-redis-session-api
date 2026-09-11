@@ -1,0 +1,39 @@
+sequenceDiagram
+    actor Client
+    participant Controller as CreateUserController
+    participant Service as UserService
+    participant Repo as UserRepository
+    participant DB as PostgreSQL
+
+    Client->>Controller: POST /v1/users {name, username, email, password}
+
+    alt fails validation
+        Controller->>Service: createUser(input)
+        Service-->>Controller: throws ValidationError
+        Controller-->>Client: 400 e.g. Password must be at least 12 characters.
+    else username already taken
+        Controller->>Service: createUser(input)
+        Service->>Repo: existsByUsername(username)
+        Repo->>DB: SELECT 1 FROM users WHERE username = $1
+        DB-->>Repo: 1 row
+        Repo-->>Service: true
+        Service-->>Controller: throws ConflictError
+        Controller-->>Client: 409 Username already taken.
+    else happy path
+        Controller->>Service: createUser(input)
+        Service->>Repo: existsByUsername(username)
+        Repo->>DB: SELECT 1 FROM users WHERE username = $1
+        DB-->>Repo: 0 rows
+        Repo-->>Service: false
+        Service->>Repo: existsByEmail(email)
+        Repo->>DB: SELECT 1 FROM users WHERE email = $1
+        DB-->>Repo: 0 rows
+        Repo-->>Service: false
+        Service->>Service: hash(password), randomUUID()
+        Service->>Repo: create(newUser)
+        Repo->>DB: INSERT INTO users (...) VALUES (...)\nrole defaults to 'user'
+        DB-->>Repo: OK
+        Repo-->>Service: void
+        Service-->>Controller: { id }
+        Controller-->>Client: 201 { message, userId }
+    end

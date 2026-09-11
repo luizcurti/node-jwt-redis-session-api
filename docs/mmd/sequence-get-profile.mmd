@@ -1,0 +1,68 @@
+sequenceDiagram
+    actor Client
+    participant Auth as auth middleware
+    participant Token as TokenService
+    participant Session as SessionRepository
+    participant Controller as GetUserInfoController
+    participant Service as UserService
+    participant Cache as CacheRepository
+    participant Repo as UserRepository
+    participant Redis
+    participant DB as PostgreSQL
+
+    Client->>Auth: GET /v1/users/profile/:id (Authorization: Bearer <access token>)
+
+    alt missing/malformed Authorization header, or invalid/expired token
+        Auth->>Token: verifyAccessToken(token)
+        Token-->>Auth: throws UnauthorizedError
+        Auth-->>Client: 401 Invalid token
+    else valid token, but session revoked or expired
+        Auth->>Token: verifyAccessToken(token)
+        Token-->>Auth: { subject, sessionId, role }
+        Auth->>Session: get(sessionId)
+        Session-->>Auth: null
+        Auth-->>Client: 401 Session expired or revoked
+    else valid token and session
+        Auth->>Token: verifyAccessToken(token)
+        Token-->>Auth: { subject, sessionId, role }
+        Auth->>Session: get(sessionId)
+        Session-->>Auth: session
+        Auth->>Auth: request.userId, sessionId, userRole = ...
+        Auth->>Controller: next()
+
+        alt requesting a different user's profile (IDOR)
+            Controller->>Service: getUserProfile(requestingUserId, targetUserId)
+            Service-->>Controller: throws ForbiddenError
+            Controller-->>Client: 403 You are not allowed to access this profile.
+        else cache hit (happy path)
+            Controller->>Service: getUserProfile(requestingUserId, targetUserId)
+            Service->>Cache: getUserProfile(targetUserId)
+            Cache->>Redis: GET user-{id}
+            Redis-->>Cache: JSON profile
+            Cache-->>Service: profile
+            Service-->>Controller: profile
+            Controller-->>Client: 200 { id, name, username, email, role }
+        else cache miss, falls back to PostgreSQL
+            Controller->>Service: getUserProfile(requestingUserId, targetUserId)
+            Service->>Cache: getUserProfile(targetUserId)
+            Cache->>Redis: GET user-{id}
+            Redis-->>Cache: nil
+            Cache-->>Service: null
+            Service->>Repo: findById(targetUserId)
+            Repo->>DB: SELECT ... WHERE id = $1
+            DB-->>Repo: user row
+            Repo-->>Service: user
+            Service->>Cache: setUserProfile(targetUserId, profile)
+            Cache->>Redis: SET user-{id} EX 1h
+            Service-->>Controller: profile
+            Controller-->>Client: 200 { id, name, username, email, role }
+        else user does not exist in PostgreSQL either
+            Controller->>Service: getUserProfile(requestingUserId, targetUserId)
+            Service->>Cache: getUserProfile(targetUserId)
+            Cache-->>Service: null
+            Service->>Repo: findById(targetUserId)
+            Repo-->>Service: null
+            Service-->>Controller: throws NotFoundError
+            Controller-->>Client: 404 User not found.
+        end
+    end

@@ -1,0 +1,189 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: test_db
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_pass
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    env:
+      NODE_ENV: test
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: test_user
+      POSTGRES_PASSWORD: test_pass
+      POSTGRES_DB: test_db
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+      JWT_SECRET: ci-test-secret-that-is-at-least-32-characters-long
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Audit production dependencies
+        run: npm run audit
+
+      - name: Run ESLint
+        run: npm run lint
+
+      - name: Check Prettier formatting
+        run: npm run format:check
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Run integration and e2e tests with coverage
+        run: npm run coverage:all
+
+      - name: Build project
+        run: npm run build
+
+      - name: Upload coverage to Codecov (optional)
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage/lcov.info
+          flags: unittests
+          name: codecov-umbrella
+
+  # Source-code SAST — runs independently of lint-and-test (no reason to
+  # wait on it), reports to the repo's Security tab rather than failing the
+  # build outright, which is the standard low-friction way to introduce this
+  # without turning every new finding into a blocked PR on day one.
+  codeql:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          config-file: ./.github/codeql/codeql-config.yml
+
+      - name: Run CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+
+  # Container image scanning — CVEs in the base image and installed
+  # packages, not in our own source (that's CodeQL's job). Also report-only
+  # for the same reason as above; flip trivy's `exit-code` to '1' to make
+  # CRITICAL/HIGH findings fail the build once the project is ready for that.
+  trivy-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build image for scanning
+        run: docker build -t jwt-redis-session-api:ci .
+
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: jwt-redis-session-api:ci
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          exit-code: '0'
+
+      - name: Upload Trivy results to the Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+
+  docker-validation:
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+
+    env:
+      JWT_SECRET: ci-docker-validation-secret-that-is-at-least-32-chars
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Docker image and start the stack
+        run: docker compose up --build -d
+
+      - name: Wait for the app to become healthy
+        run: |
+          for _ in $(seq 1 30); do
+            if curl -sf http://localhost:3000/ > /dev/null; then
+              echo "App is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "App did not start in time" >&2
+          exit 1
+
+      - name: Run Postman collection tests against the containerized app
+        run: npm run test:collection
+
+      - name: Show container logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Tear down the stack
+        if: always()
+        run: docker compose down -v

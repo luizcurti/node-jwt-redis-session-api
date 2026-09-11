@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "es2023",
+    "module": "commonjs",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "typeRoots": ["./src/@types", "node_modules/@types"],
+    "outDir": "./dist",
+    "rootDir": "./src"
+  },
+  "exclude": ["src/__tests__", "node_modules"]
+}

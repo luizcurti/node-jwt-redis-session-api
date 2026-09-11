@@ -1,0 +1,106 @@
+services:
+  app:
+    container_name: node-app
+    build:
+      context: .
+      target: runtime
+    ports:
+      - '3000:3000'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    environment: &db-env
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-mydb}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET (>=32 chars) in your .env file — see .env.example}
+    # The app never writes to disk (logs go to stdout, no uploads, no local
+    # session/cache files) — a read-only root filesystem means a compromised
+    # dependency can't persist anything to the container even if it tries.
+    # /tmp is the one path some Node internals expect to be writable.
+    read_only: true
+    tmpfs:
+      - /tmp
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+
+  # One-shot: applies pending migrations (migrations/) and exits. `app` won't
+  # start until this exits 0 — see `depends_on` above.
+  migrate:
+    container_name: node-migrate
+    build:
+      context: .
+      target: runtime
+    command: ['node', 'scripts/migrate.js', 'up']
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment: *db-env
+    read_only: true
+    tmpfs:
+      - /tmp
+    # Inherited from the image, but meaningless here: this container never
+    # listens on a port — it runs once and exits, it doesn't sit around to
+    # be polled for liveness.
+    healthcheck:
+      disable: true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+  postgres:
+    image: postgres:15
+    container_name: postgres-db
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-mydb}
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'pg_isready -U ${POSTGRES_USER:-user} -d ${POSTGRES_DB:-mydb}',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+
+  redis:
+    image: redis:7
+    container_name: redis-cache
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+volumes:
+  pgdata:

@@ -1,5 +1,6 @@
 const coveragePathIgnorePatterns = [
   '/node_modules/',
+  '/src/__tests__/',
   '/src/server.ts',
   '/src/routes.ts',
   '/src/docs/',
@@ -15,9 +16,9 @@ const baseProject = {
 
 const infraProject = {
   ...baseProject,
-  setupFiles: ['<rootDir>/__tests__/testSetup/testEnv.js'],
-  globalSetup: '<rootDir>/__tests__/testSetup/globalSetup.js',
-  globalTeardown: '<rootDir>/__tests__/testSetup/globalTeardown.js',
+  setupFiles: ['<rootDir>/src/__tests__/testSetup/testEnv.js'],
+  globalSetup: '<rootDir>/src/__tests__/testSetup/globalSetup.js',
+  globalTeardown: '<rootDir>/src/__tests__/testSetup/globalTeardown.js',
 };
 
 module.exports = {
@@ -37,17 +38,17 @@ module.exports = {
     {
       ...baseProject,
       displayName: 'unit',
-      testMatch: ['<rootDir>/__tests__/unit/**/*.test.ts'],
+      testMatch: ['<rootDir>/src/__tests__/unit/**/*.test.ts'],
     },
     {
       ...infraProject,
       displayName: 'integration',
-      testMatch: ['<rootDir>/__tests__/integration/**/*.test.ts'],
+      testMatch: ['<rootDir>/src/__tests__/integration/**/*.test.ts'],
     },
     {
       ...infraProject,
       displayName: 'e2e',
-      testMatch: ['<rootDir>/__tests__/e2e/**/*.test.ts'],
+      testMatch: ['<rootDir>/src/__tests__/e2e/**/*.test.ts'],
     },
   ],
 };

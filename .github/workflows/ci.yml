@@ -48,7 +48,7 @@ jobs:
       POSTGRES_DB: test_db
       REDIS_HOST: localhost
       REDIS_PORT: 6379
-      JWT_SECRET: ci-test-secret
+      JWT_SECRET: ci-test-secret-that-is-at-least-32-characters-long
 
     steps:
       - name: Checkout code
@@ -95,6 +95,9 @@ jobs:
   docker-validation:
     needs: lint-and-test
     runs-on: ubuntu-latest
+
+    env:
+      JWT_SECRET: ci-docker-validation-secret-that-is-at-least-32-chars
 
     steps:
       - name: Checkout code

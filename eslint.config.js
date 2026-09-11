@@ -49,6 +49,7 @@ module.exports = [
   // TypeScript files in src/
   {
     files: ['src/**/*.ts'],
+    ignores: ['src/__tests__/**'],
     languageOptions: {
       parser: tsparser,
       parserOptions: {

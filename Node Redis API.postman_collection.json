@@ -2,7 +2,7 @@
 	"info": {
 		"_postman_id": "9548a068-b36f-4752-b2a0-721d806a8789",
 		"name": "Node Redis API",
-		"description": "Collection of endpoints for the Node.js app with Redis. Covers the happy path and the sad path (validation, auth, and ownership errors) for every endpoint. Run with newman: `npm run test:collection`.\n\nNote: the 404 \"profile not cached\" case (session expired) is intentionally not covered here — it requires directly clearing the Redis cache, which is out of reach for a black-box HTTP collection. It is covered by the Jest e2e suite instead.",
+		"description": "Collection of endpoints for the Node.js app with Redis. Covers the happy path and the sad path (validation, auth, ownership, refresh-rotation/reuse-detection, and logout-revocation errors) for every endpoint. Run with newman: `npm run test:collection`.\n\nNote: the 404 \"user not found\" case is intentionally not covered here — GET /users/profile/:id is a true read-through cache (a Redis miss falls back to PostgreSQL), so reaching a 404 requires deleting the user from PostgreSQL directly, which is out of reach for a black-box HTTP collection. It is covered by the Jest e2e suite instead.",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
 		"_exporter_id": "43702418"
 	},
@@ -18,7 +18,17 @@
 			"type": "string"
 		},
 		{
-			"key": "token",
+			"key": "accessToken",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "refreshToken",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "previousRefreshToken",
 			"value": "",
 			"type": "string"
 		},
@@ -49,6 +59,52 @@
 				"method": "GET",
 				"header": [],
 				"url": { "raw": "{{baseUrl}}/", "host": ["{{baseUrl}}"], "path": [""] }
+			},
+			"response": []
+		},
+		{
+			"name": "Liveness Check (/health)",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"type": "text/javascript",
+						"exec": [
+							"pm.test('status is 200', () => pm.response.to.have.status(200));",
+							"pm.test('reports ok', () => {",
+							"    pm.expect(pm.response.json()).to.eql({ status: 'ok' });",
+							"});"
+						]
+					}
+				}
+			],
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] }
+			},
+			"response": []
+		},
+		{
+			"name": "Readiness Check (/ready)",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"type": "text/javascript",
+						"exec": [
+							"pm.test('status is 200', () => pm.response.to.have.status(200));",
+							"pm.test('reports both dependencies ok', () => {",
+							"    pm.expect(pm.response.json()).to.eql({ postgres: 'ok', redis: 'ok' });",
+							"});"
+						]
+					}
+				}
+			],
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": { "raw": "{{baseUrl}}/ready", "host": ["{{baseUrl}}"], "path": ["ready"] }
 			},
 			"response": []
 		},
@@ -84,7 +140,7 @@
 				"header": [{ "key": "Content-Type", "value": "application/json" }],
 				"body": {
 					"mode": "raw",
-					"raw": "{\n    \"name\": \"New User\",\n    \"username\": \"{{username}}\",\n    \"email\": \"{{username}}@example.com\",\n    \"password\": \"newpassword\"\n}",
+					"raw": "{\n    \"name\": \"New User\",\n    \"username\": \"{{username}}\",\n    \"email\": \"{{username}}@example.com\",\n    \"password\": \"newpassword123\"\n}",
 					"options": { "raw": { "language": "json" } }
 				},
 				"url": { "raw": "{{baseUrl}}/users", "host": ["{{baseUrl}}"], "path": ["users"] }
@@ -100,8 +156,8 @@
 						"type": "text/javascript",
 						"exec": [
 							"pm.test('status is 400', () => pm.response.to.have.status(400));",
-							"pm.test('reports missing fields', () => {",
-							"    pm.expect(pm.response.json()).to.eql({ error: 'Missing required fields.' });",
+							"pm.test('reports the first missing field', () => {",
+							"    pm.expect(pm.response.json()).to.eql({ error: 'Name is required.' });",
 							"});"
 						]
 					}
@@ -113,6 +169,90 @@
 				"body": {
 					"mode": "raw",
 					"raw": "{\n    \"username\": \"incomplete\"\n}",
+					"options": { "raw": { "language": "json" } }
+				},
+				"url": { "raw": "{{baseUrl}}/users", "host": ["{{baseUrl}}"], "path": ["users"] }
+			},
+			"response": []
+		},
+		{
+			"name": "Create User - username too short (sad path)",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"type": "text/javascript",
+						"exec": [
+							"pm.test('status is 400', () => pm.response.to.have.status(400));",
+							"pm.test('reports the username length rule', () => {",
+							"    pm.expect(pm.response.json()).to.eql({ error: 'Username must be at least 3 characters.' });",
+							"});"
+						]
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [{ "key": "Content-Type", "value": "application/json" }],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"name\": \"New User\",\n    \"username\": \"ab\",\n    \"email\": \"shortname@example.com\",\n    \"password\": \"newpassword123\"\n}",
+					"options": { "raw": { "language": "json" } }
+				},
+				"url": { "raw": "{{baseUrl}}/users", "host": ["{{baseUrl}}"], "path": ["users"] }
+			},
+			"response": []
+		},
+		{
+			"name": "Create User - invalid email (sad path)",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"type": "text/javascript",
+						"exec": [
+							"pm.test('status is 400', () => pm.response.to.have.status(400));",
+							"pm.test('reports the email format rule', () => {",
+							"    pm.expect(pm.response.json()).to.eql({ error: 'Email must be a valid email address.' });",
+							"});"
+						]
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [{ "key": "Content-Type", "value": "application/json" }],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"name\": \"New User\",\n    \"username\": \"invalidemailuser\",\n    \"email\": \"not-an-email\",\n    \"password\": \"newpassword123\"\n}",
+					"options": { "raw": { "language": "json" } }
+				},
+				"url": { "raw": "{{baseUrl}}/users", "host": ["{{baseUrl}}"], "path": ["users"] }
+			},
+			"response": []
+		},
+		{
+			"name": "Create User - password too short (sad path)",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"type": "text/javascript",
+						"exec": [
+							"pm.test('status is 400', () => pm.response.to.have.status(400));",
+							"pm.test('reports the password length rule', () => {",
+							"    pm.expect(pm.response.json()).to.eql({ error: 'Password must be at least 12 characters.' });",
+							"});"
+						]
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [{ "key": "Content-Type", "value": "application/json" }],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"name\": \"New User\",\n    \"username\": \"shortpassuser\",\n    \"email\": \"shortpass@example.com\",\n    \"password\": \"short\"\n}",
 					"options": { "raw": { "language": "json" } }
 				},
 				"url": { "raw": "{{baseUrl}}/users", "host": ["{{baseUrl}}"], "path": ["users"] }
@@ -140,7 +280,7 @@
 				"header": [{ "key": "Content-Type", "value": "application/json" }],
 				"body": {
 					"mode": "raw",
-					"raw": "{\n    \"name\": \"Another User\",\n    \"username\": \"{{username}}\",\n    \"email\": \"another_{{username}}@example.com\",\n    \"password\": \"newpassword\"\n}",
+					"raw": "{\n    \"name\": \"Another User\",\n    \"username\": \"{{username}}\",\n    \"email\": \"another_{{username}}@example.com\",\n    \"password\": \"newpassword123\"\n}",
 					"options": { "raw": { "language": "json" } }
 				},
 				"url": { "raw": "{{baseUrl}}/users", "host": ["{{baseUrl}}"], "path": ["users"] }
@@ -168,7 +308,7 @@
 				"header": [{ "key": "Content-Type", "value": "application/json" }],
 				"body": {
 					"mode": "raw",
-					"raw": "{\n    \"name\": \"Another User\",\n    \"username\": \"another_{{username}}\",\n    \"email\": \"{{username}}@example.com\",\n    \"password\": \"newpassword\"\n}",
+					"raw": "{\n    \"name\": \"Another User\",\n    \"username\": \"another_{{username}}\",\n    \"email\": \"{{username}}@example.com\",\n    \"password\": \"newpassword123\"\n}",
 					"options": { "raw": { "language": "json" } }
 				},
 				"url": { "raw": "{{baseUrl}}/users", "host": ["{{baseUrl}}"], "path": ["users"] }
@@ -241,13 +381,15 @@
 						"exec": [
 							"pm.test('status is 200', () => pm.response.to.have.status(200));",
 							"const body = pm.response.json();",
-							"pm.test('response has message, token and user', () => {",
+							"pm.test('response has message, accessToken, refreshToken and user', () => {",
 							"    pm.expect(body.message).to.eql('Login successful');",
-							"    pm.expect(body.token).to.be.a('string').and.not.empty;",
+							"    pm.expect(body.accessToken).to.be.a('string').and.not.empty;",
+							"    pm.expect(body.refreshToken).to.be.a('string').and.not.empty;",
 							"    pm.expect(body.user).to.include.keys('id', 'name', 'username', 'email');",
 							"    pm.expect(body.user).to.not.have.property('password');",
 							"});",
-							"if (body.token) pm.collectionVariables.set('token', body.token);",
+							"if (body.accessToken) pm.collectionVariables.set('accessToken', body.accessToken);",
+							"if (body.refreshToken) pm.collectionVariables.set('refreshToken', body.refreshToken);",
 							"if (body.user && body.user.id) pm.collectionVariables.set('userId', body.user.id);"
 						]
 					}
@@ -258,7 +400,7 @@
 				"header": [{ "key": "Content-Type", "value": "application/json" }],
 				"body": {
 					"mode": "raw",
-					"raw": "{\n    \"username\": \"{{username}}\",\n    \"password\": \"newpassword\"\n}",
+					"raw": "{\n    \"username\": \"{{username}}\",\n    \"password\": \"newpassword123\"\n}",
 					"options": { "raw": { "language": "json" } }
 				},
 				"url": { "raw": "{{baseUrl}}/login", "host": ["{{baseUrl}}"], "path": ["login"] }
@@ -344,7 +486,7 @@
 				"header": [],
 				"auth": {
 					"type": "bearer",
-					"bearer": [{ "key": "token", "value": "{{token}}", "type": "string" }]
+					"bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
 				},
 				"url": {
 					"raw": "{{baseUrl}}/users/profile/00000000-0000-0000-0000-000000000000",
@@ -377,12 +519,240 @@
 				"header": [],
 				"auth": {
 					"type": "bearer",
-					"bearer": [{ "key": "token", "value": "{{token}}", "type": "string" }]
+					"bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
 				},
 				"url": {
 					"raw": "{{baseUrl}}/users/profile/{{userId}}",
 					"host": ["{{baseUrl}}"],
 					"path": ["users", "profile", "{{userId}}"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Refresh Token - missing token (sad path)",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"type": "text/javascript",
+						"exec": [
+							"pm.test('status is 400', () => pm.response.to.have.status(400));",
+							"pm.test('reports missing refresh token', () => {",
+							"    pm.expect(pm.response.json()).to.eql({ error: 'Refresh token is required.' });",
+							"});"
+						]
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [{ "key": "Content-Type", "value": "application/json" }],
+				"body": { "mode": "raw", "raw": "{}", "options": { "raw": { "language": "json" } } },
+				"url": {
+					"raw": "{{baseUrl}}/auth/refresh",
+					"host": ["{{baseUrl}}"],
+					"path": ["auth", "refresh"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Refresh Token - malformed token (sad path)",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"type": "text/javascript",
+						"exec": [
+							"pm.test('status is 401', () => pm.response.to.have.status(401));",
+							"pm.test('reports an invalid refresh token', () => {",
+							"    pm.expect(pm.response.json()).to.eql({ error: 'Invalid refresh token.' });",
+							"});"
+						]
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [{ "key": "Content-Type", "value": "application/json" }],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"refreshToken\": \"not-well-formed\"\n}",
+					"options": { "raw": { "language": "json" } }
+				},
+				"url": {
+					"raw": "{{baseUrl}}/auth/refresh",
+					"host": ["{{baseUrl}}"],
+					"path": ["auth", "refresh"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Refresh Token (happy path)",
+			"event": [
+				{
+					"listen": "prerequest",
+					"script": {
+						"type": "text/javascript",
+						"exec": [
+							"pm.collectionVariables.set('previousRefreshToken', pm.collectionVariables.get('refreshToken'));"
+						]
+					}
+				},
+				{
+					"listen": "test",
+					"script": {
+						"type": "text/javascript",
+						"exec": [
+							"pm.test('status is 200', () => pm.response.to.have.status(200));",
+							"const body = pm.response.json();",
+							"pm.test('returns a rotated access/refresh token pair', () => {",
+							"    pm.expect(body.message).to.eql('Token refreshed successfully');",
+							"    pm.expect(body.accessToken).to.be.a('string').and.not.empty;",
+							"    pm.expect(body.refreshToken).to.be.a('string').and.not.empty;",
+							"    pm.expect(body.refreshToken).to.not.eql(pm.collectionVariables.get('previousRefreshToken'));",
+							"});",
+							"if (body.accessToken) pm.collectionVariables.set('accessToken', body.accessToken);",
+							"if (body.refreshToken) pm.collectionVariables.set('refreshToken', body.refreshToken);"
+						]
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [{ "key": "Content-Type", "value": "application/json" }],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"refreshToken\": \"{{refreshToken}}\"\n}",
+					"options": { "raw": { "language": "json" } }
+				},
+				"url": {
+					"raw": "{{baseUrl}}/auth/refresh",
+					"host": ["{{baseUrl}}"],
+					"path": ["auth", "refresh"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Logout - missing token (sad path)",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"type": "text/javascript",
+						"exec": [
+							"pm.test('status is 401', () => pm.response.to.have.status(401));",
+							"pm.test('reports missing token', () => {",
+							"    pm.expect(pm.response.json()).to.eql({ error: 'Token missing' });",
+							"});"
+						]
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [],
+				"url": {
+					"raw": "{{baseUrl}}/auth/logout",
+					"host": ["{{baseUrl}}"],
+					"path": ["auth", "logout"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Logout (happy path)",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"type": "text/javascript",
+						"exec": [
+							"pm.test('status is 200', () => pm.response.to.have.status(200));",
+							"pm.test('reports logout successful', () => {",
+							"    pm.expect(pm.response.json()).to.eql({ message: 'Logout successful' });",
+							"});"
+						]
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [],
+				"auth": {
+					"type": "bearer",
+					"bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+				},
+				"url": {
+					"raw": "{{baseUrl}}/auth/logout",
+					"host": ["{{baseUrl}}"],
+					"path": ["auth", "logout"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Get Profile After Logout (sad path)",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"type": "text/javascript",
+						"exec": [
+							"pm.test('status is 401', () => pm.response.to.have.status(401));",
+							"pm.test('reports the session as revoked, even though the access token has not expired', () => {",
+							"    pm.expect(pm.response.json()).to.eql({ error: 'Session expired or revoked' });",
+							"});"
+						]
+					}
+				}
+			],
+			"request": {
+				"method": "GET",
+				"header": [],
+				"auth": {
+					"type": "bearer",
+					"bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+				},
+				"url": {
+					"raw": "{{baseUrl}}/users/profile/{{userId}}",
+					"host": ["{{baseUrl}}"],
+					"path": ["users", "profile", "{{userId}}"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Refresh Token - reused token rejected (sad path)",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"type": "text/javascript",
+						"exec": [
+							"pm.test('status is 401', () => pm.response.to.have.status(401));",
+							"pm.test('reports an invalid refresh token', () => {",
+							"    pm.expect(pm.response.json()).to.eql({ error: 'Invalid refresh token.' });",
+							"});"
+						]
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [{ "key": "Content-Type", "value": "application/json" }],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"refreshToken\": \"{{previousRefreshToken}}\"\n}",
+					"options": { "raw": { "language": "json" } }
+				},
+				"url": {
+					"raw": "{{baseUrl}}/auth/refresh",
+					"host": ["{{baseUrl}}"],
+					"path": ["auth", "refresh"]
 				}
 			},
 			"response": []

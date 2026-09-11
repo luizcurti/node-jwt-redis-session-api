@@ -1,30 +1,36 @@
-import { NextFunction, Request, RequestHandler, Response } from 'express';
+import { RequestHandler } from 'express';
 import { UnauthorizedError } from '../errors/AppError';
+import { SessionRepository } from '../repositories/SessionRepository';
 import { TokenService } from '../services/TokenService';
+import { asyncHandler } from './asyncHandler';
 
 export function createAuthMiddleware(
-  tokenService: TokenService
+  tokenService: TokenService,
+  sessionRepository: SessionRepository
 ): RequestHandler {
-  return function authentication(
-    request: Request,
-    response: Response,
-    next: NextFunction
-  ): void {
+  return asyncHandler(async function authentication(request, response, next) {
     const authHeader = request.headers.authorization;
 
     if (!authHeader) {
       throw new UnauthorizedError('Token missing');
     }
 
-    const [, token] = authHeader.split(' ');
+    const [scheme, token] = authHeader.split(' ');
 
-    if (!token) {
+    if (scheme !== 'Bearer' || !token) {
       throw new UnauthorizedError('Invalid token');
     }
 
-    const { subject } = tokenService.verify(token);
+    const { subject, sessionId } = tokenService.verifyAccessToken(token);
+    const session = await sessionRepository.get(sessionId);
+
+    if (!session) {
+      throw new UnauthorizedError('Session expired or revoked');
+    }
+
     request.userId = subject;
+    request.sessionId = sessionId;
 
     next();
-  };
+  });
 }

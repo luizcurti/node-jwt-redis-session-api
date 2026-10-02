@@ -1,0 +1,55 @@
+sequenceDiagram
+    actor Client
+    participant Controller as LoginUserController
+    participant Service as AuthService
+    participant Throttle as LoginThrottle
+    participant Repo as UserRepository
+    participant DB as PostgreSQL
+    participant Session as SessionRepository
+    participant Token as TokenService
+    participant Cache as CacheRepository
+    participant Redis
+
+    Client->>Controller: POST /v1/login {username, password}
+
+    alt missing username or password
+        Controller->>Service: login(input)
+        Service-->>Controller: throws ValidationError
+        Controller-->>Client: 400 Username and password are required.
+    else account in failed-login backoff
+        Controller->>Service: login(input)
+        Service->>Throttle: assertNotThrottled(username)
+        Throttle->>Redis: TTL login:lock:{username}
+        Throttle-->>Service: throws TooManyRequestsError
+        Controller-->>Client: 429 + Retry-After
+    else unknown username or wrong password
+        Controller->>Service: login(input)
+        Service->>Throttle: assertNotThrottled(username)
+        Service->>Repo: findByUsername(username)
+        Repo->>DB: SELECT ... WHERE lower(username) = lower($1)
+        DB-->>Repo: no rows, or a row whose hash doesn't match
+        Service->>Service: bcrypt.compare(password, hash or DUMMY hash)
+        Note over Service: unknown user still pays the bcrypt cost — no timing oracle
+        Service->>Throttle: recordFailure(username)
+        Throttle->>Redis: EVAL (INCR + EXPIRE on first + backoff lock), atomic
+        Service-->>Controller: throws UnauthorizedError
+        Controller-->>Client: 401 Invalid credentials.
+    else happy path
+        Controller->>Service: login(input)
+        Service->>Throttle: assertNotThrottled(username)
+        Service->>Repo: findByUsername(username)
+        Repo->>DB: SELECT ... WHERE lower(username) = lower($1)
+        DB-->>Repo: user row (incl. role)
+        Service->>Service: bcrypt.compare(password, user.passwordHash) = true
+        Service->>Throttle: reset(username)
+        Service->>Token: generateRefreshToken()
+        Token-->>Service: { validator, hash }
+        Service->>Session: create(sessionId, { userId, role, refreshTokenHash, createdAt, expiresAt, absoluteExpiresAt })
+        Session->>Redis: MULTI: SET session:{id} EX 7d, SADD user_sessions:{userId}, EXPIRE 30d
+        Service->>Token: signAccessToken(userId, sessionId, role)
+        Token-->>Service: accessToken (JWT, 15m, iss/aud)
+        Service->>Cache: setUserProfile(user.id, publicUser)
+        Cache->>Redis: SET user-{id} EX 1h (best-effort)
+        Service-->>Controller: { accessToken, refreshToken, user }
+        Controller-->>Client: 200 { message, accessToken, refreshToken, user }
+    end

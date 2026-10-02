@@ -1,0 +1,51 @@
+flowchart TD
+    Client([Client])
+
+    subgraph App["Node.js / Express app — createApp() + createRouter()"]
+        Edge["/v1 router<br/>apiRateLimiter: 100 req/min per IP"]
+
+        subgraph Public["Public routes"]
+            CreateUser["CreateUserController<br/>POST /v1/users"]
+            Login["LoginUserController<br/>POST /v1/login<br/>+ per-IP login limit"]
+            Refresh["RefreshTokenController<br/>POST /v1/auth/refresh<br/>+ per-session refresh limit"]
+        end
+
+        Auth["auth middleware<br/>JWT verify + session lookup"]
+
+        subgraph Protected["Authenticated routes"]
+            Logout["LogoutController<br/>POST /v1/auth/logout"]
+            LogoutAll["LogoutAllController<br/>POST /v1/auth/logout-all"]
+            Me["GetUserInfoController<br/>GET /v1/users/me"]
+            ListUsers["ListUsersController<br/>GET /v1/admin/users<br/>requireRole('admin')"]
+        end
+
+        subgraph Services["Services"]
+            UserService
+            AuthService
+            TokenService
+            LoginThrottle
+        end
+
+        subgraph Repositories["Repositories"]
+            UserRepository
+            CacheRepository
+            SessionRepository
+        end
+    end
+
+    Postgres[("PostgreSQL<br/>users")]
+    Redis[("Redis<br/>sessions · cache · rate limits · login backoff")]
+
+    Client --> Edge
+    Edge --> CreateUser & Login & Refresh
+    Edge --> Auth --> Logout & LogoutAll & Me & ListUsers
+
+    CreateUser & Me & ListUsers --> UserService
+    Login & Refresh & Logout & LogoutAll --> AuthService
+
+    AuthService --> TokenService & LoginThrottle & SessionRepository & UserRepository & CacheRepository
+    UserService --> UserRepository & CacheRepository
+    Auth -.-> TokenService & SessionRepository
+
+    UserRepository --> Postgres
+    CacheRepository & SessionRepository & LoginThrottle --> Redis

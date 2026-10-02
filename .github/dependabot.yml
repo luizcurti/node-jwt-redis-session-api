@@ -1,0 +1,49 @@
+version: 2
+updates:
+  - package-ecosystem: 'npm'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+    groups:
+      # devDependencies churn constantly and are low-risk (build/test tooling,
+      # not shipped code) — batch them into one PR/week instead of one per
+      # package. Production dependencies stay ungrouped so each gets its own
+      # PR with a diffable changelog for review.
+      dev-dependencies:
+        dependency-type: 'development'
+    ignore:
+      # @typescript-eslint 8.x peers on typescript <6.1.0; bumping past that
+      # breaks `npm ci` with ERESOLVE. Lift once typescript-eslint supports it.
+      - dependency-name: 'typescript'
+        versions: ['>=6.1.0']
+      # Types must match the Node 24 runtime (Dockerfile, engines, CI).
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
+    open-pull-requests-limit: 10
+
+  # Keeps the Dockerfile's digest-pinned node:24-slim fresh. Majors are
+  # ignored: odd Node majors (25, 27) never become LTS, and moving to the
+  # next even one is a deliberate upgrade (engines, CI, README), not a
+  # weekly bump.
+  - package-ecosystem: 'docker'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+    ignore:
+      - dependency-name: 'node'
+        update-types: ['version-update:semver-major']
+
+  # postgres/redis images in docker-compose.yml. A Postgres major needs a
+  # data-directory upgrade, so majors are never proposed automatically.
+  - package-ecosystem: 'docker-compose'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
+
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'weekly'

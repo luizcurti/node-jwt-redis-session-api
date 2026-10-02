@@ -1,0 +1,19 @@
+flowchart LR
+    Client([Client / Prometheus])
+
+    subgraph Host["Docker host — ports bound to 127.0.0.1 only"]
+        subgraph Net["compose network"]
+            Migrate["migrate (one-shot)\njwt-redis-session-api:local\nnode scripts/migrate.js up"]
+            App["app\njwt-redis-session-api:local\nnode dist/server.js (tini PID 1)\nnon-root, read-only fs"]
+            Postgres[("postgres 17.11\nvolume: pgdata")]
+            Redis[("redis 7.4.11\nrequirepass, AOF, maxmemory 200mb\nnoeviction\nvolume: redisdata")]
+        end
+    end
+
+    Client -->|"APP_PORT → 3000"| App
+    Migrate -->|"1. apply migrations"| Postgres
+    Postgres -.->|"healthy"| Migrate
+    Migrate -.->|"2. exited 0"| App
+    Redis -.->|"healthy"| App
+    App -->|"users"| Postgres
+    App -->|"sessions, cache, rate limits"| Redis

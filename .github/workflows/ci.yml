@@ -1,0 +1,189 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Least privilege by default; jobs that upload to the Security tab widen it.
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17.11
+        env:
+          POSTGRES_DB: test_db
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_pass
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7.4.11
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    env:
+      NODE_ENV: test
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: test_user
+      POSTGRES_PASSWORD: test_pass
+      POSTGRES_DB: test_db
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+      JWT_SECRET: ci-test-secret-that-is-at-least-32-characters-long
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Audit production dependencies
+        run: npm run audit
+
+      - name: Run ESLint
+        run: npm run lint
+
+      - name: Check Prettier formatting
+        run: npm run format:check
+
+      - name: Type check
+        run: npm run typecheck
+
+      # One Jest run across all three projects (unit, integration, e2e):
+      # coverage needs the combined run anyway, so a separate unit-only step
+      # would just run the unit suite twice.
+      - name: Unit, integration and e2e tests with coverage
+        run: npm run coverage:all
+
+      - name: Build project
+        run: npm run build
+
+      - name: Upload coverage to Codecov (optional)
+        uses: codecov/codecov-action@v6
+        with:
+          files: ./coverage/lcov.info
+          name: codecov-umbrella
+
+  # Source-code SAST, in parallel with lint-and-test. Findings go to the
+  # repo's Security tab; they don't fail the build.
+  codeql:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: javascript-typescript
+          config-file: ./.github/codeql/codeql-config.yml
+
+      - name: Run CodeQL analysis
+        uses: github/codeql-action/analyze@v4
+
+  # Builds the production image once, scans it, then runs it: the image
+  # Trivy checks is exactly the one the Newman collection is run against.
+  # Trivy blocks on CRITICAL/HIGH findings that already have a fix (there's
+  # something to do — bump the base image digest or the dependency); unfixed
+  # ones are still reported in the Security tab.
+  docker-validation:
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+
+    env:
+      JWT_SECRET: ci-docker-validation-secret-that-is-at-least-32-chars
+      POSTGRES_PASSWORD: ci-postgres-password
+      REDIS_PASSWORD: ci-redis-password
+      METRICS_TOKEN: ci-metrics-token
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the Docker image
+        run: docker compose build
+
+      - name: Scan the image with Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: jwt-redis-session-api:local
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Upload Trivy results to the Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-results.sarif
+
+      - name: Start the stack
+        run: docker compose up -d
+
+      - name: Wait for the app to become ready
+        run: |
+          for _ in $(seq 1 30); do
+            if curl -sf http://localhost:3000/ready > /dev/null; then
+              echo "App is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "App did not start in time" >&2
+          exit 1
+
+      - name: Run Postman collection tests against the containerized app
+        run: npm run test:collection
+
+      - name: Show container logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Tear down the stack
+        if: always()
+        run: docker compose down -v

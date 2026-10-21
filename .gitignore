@@ -37,3 +37,11 @@ Thumbs.db
 
 # TypeScript cache
 *.tsbuildinfo
+# Terraform
+infra/.terraform/
+infra/terraform.tfstate*
+infra/ci_backend.tf
+infra/tfplan
+infra/*.log
+bootstrap/.terraform/
+bootstrap/terraform.tfstate*

@@ -10,6 +10,7 @@
 | `PORT`               | no                   | `3000`      | HTTP port inside the container or process                                              |
 | `POSTGRES_HOST` / `POSTGRES_PORT` / `POSTGRES_USER` / `POSTGRES_DB` | no | `localhost` / `5432` / `user` / `mydb` | PostgreSQL connection |
 | `REDIS_HOST` / `REDIS_PORT` | no            | `localhost` / `6379` | Redis connection                                                              |
+| `REDIS_TLS`          | no                   | unset       | `true` connects over TLS (required by ElastiCache with an AUTH token, see [deployment](deployment.md)) |
 | `LOG_LEVEL`          | no                   | `info`      | pino log level                                                                         |
 | `APP_PORT` / `POSTGRES_HOST_PORT` / `REDIS_HOST_PORT` | no | `3000` / `5432` / `6379` | Host ports published by Compose (bound to `127.0.0.1`) |
 

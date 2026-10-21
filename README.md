@@ -103,6 +103,8 @@ GitHub Actions on every push and pull request to `main`:
 - **lint-and-test** — dependency audit, ESLint, Prettier, typecheck, unit + integration + e2e tests with coverage (PostgreSQL and Redis service containers), build.
 - **docker-validation** — builds the image, scans it with Trivy (fails on fixable HIGH/CRITICAL), starts the Compose stack, waits for `/ready`, runs the Postman collection.
 - **codeql** — static analysis.
+- **infra** — `terraform fmt`/`validate` of [`infra/`](infra) and [`bootstrap/`](bootstrap).
+- **deploy** (pushes to `main`, once configured) — deploys to AWS (CloudFront, ECS Fargate, RDS PostgreSQL, ElastiCache Redis) and runs `/ready` plus the Postman collection against the live API; see [deployment](docs/deployment.md). [`destroy.yml`](.github/workflows/destroy.yml) tears it down on demand.
 
 ## Documentation
 
@@ -116,6 +118,7 @@ GitHub Actions on every push and pull request to `main`:
 | [observability.md](docs/observability.md)       | Logs, probes, metrics, graceful shutdown                       |
 | [testing.md](docs/testing.md)                   | Test tiers, how to run them, notable cases                     |
 | [technical-notes.md](docs/technical-notes.md)   | Toolchain, Docker image, ports, scaling                        |
+| [deployment.md](docs/deployment.md)             | AWS deployment via GitHub Actions, setup, tear down            |
 | [docs/README.md](docs/README.md)                | Diagram sources and how to render them                         |
 
 ## License

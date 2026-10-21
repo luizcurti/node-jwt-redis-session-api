@@ -19,6 +19,12 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
+# Debian security fixes published after the pinned digest was built (perl-base,
+# libpcre2, ...). Without this, Trivy fails on OS CVEs that already have a fix.
+RUN apt-get update \
+  && apt-get upgrade -y --no-install-recommends \
+  && rm -rf /var/lib/apt/lists/*
+
 COPY package*.json ./
 # Production deps, then drop the package managers: nothing at runtime runs
 # npm/npx/corepack (the app and the migrate service both start with `node`),

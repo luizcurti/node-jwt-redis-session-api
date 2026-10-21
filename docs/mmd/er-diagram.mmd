@@ -1,0 +1,12 @@
+erDiagram
+    USERS {
+        UUID id PK "default gen_random_uuid()"
+        TEXT name
+        TEXT username UK "unique on lower(username)"
+        TEXT password_hash "bcrypt hash"
+        TEXT email UK "stored lowercased"
+        TEXT role "user or admin, default user"
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at "bumped by trigger"
+        TIMESTAMPTZ password_changed_at
+    }

@@ -1,0 +1,47 @@
+sequenceDiagram
+    actor Client
+    participant Controller as CreateUserController
+    participant Service as UserService
+    participant Repo as UserRepository
+    participant DB as PostgreSQL
+
+    Client->>Controller: POST /v1/users {name, username, email, password}
+
+    alt fails validation
+        Controller->>Service: createUser(input)
+        Service-->>Controller: throws ValidationError
+        Controller-->>Client: 400 e.g. Password must be at least 12 characters.
+    else username already taken (any letter case)
+        Controller->>Service: createUser(input)
+        Service->>Repo: existsByUsername(username)
+        Repo->>DB: SELECT 1 FROM users WHERE lower(username) = lower($1)
+        DB-->>Repo: 1 row
+        Service-->>Controller: throws ConflictError
+        Controller-->>Client: 409 Username already taken.
+    else email already registered
+        Controller->>Service: createUser(input)
+        Service->>Repo: existsByUsername(username)
+        Repo-->>Service: false
+        Service->>Repo: existsByEmail(email)
+        Repo->>DB: SELECT 1 FROM users WHERE email = $1
+        DB-->>Repo: 1 row
+        Service-->>Controller: throws ConflictError
+        Controller-->>Client: 409 Email already registered.
+    else happy path
+        Controller->>Service: createUser(input)
+        Service->>Repo: existsByUsername / existsByEmail
+        Repo-->>Service: false, false
+        Service->>Service: bcrypt hash (cost 12), randomUUID()
+        Service->>Repo: create(newUser)
+        Repo->>DB: INSERT INTO users (id, name, username, password_hash, email)
+        DB-->>Repo: OK (role defaults to 'user')
+        Service-->>Controller: { id }
+        Controller-->>Client: 201 { message, userId }
+    else concurrent signup wins the race after the checks
+        Controller->>Service: createUser(input)
+        Service->>Repo: create(newUser)
+        Repo->>DB: INSERT INTO users (...)
+        DB-->>Repo: 23505 unique violation (users_username_lower_key / users_email_key)
+        Repo-->>Service: throws ConflictError
+        Controller-->>Client: 409 Username already taken. / Email already registered.
+    end

@@ -1,0 +1,394 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # "Run workflow" on main re-runs the pipeline and deploys, e.g. to recreate the stack after
+  # the Destroy workflow.
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Never cancel a run on main mid-deploy (it could leave a Terraform state lock behind).
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+# Least privilege by default; jobs that upload to the Security tab widen it.
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17.11
+        env:
+          POSTGRES_DB: test_db
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_pass
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7.4.11
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    env:
+      NODE_ENV: test
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: test_user
+      POSTGRES_PASSWORD: test_pass
+      POSTGRES_DB: test_db
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+      JWT_SECRET: ci-test-secret-that-is-at-least-32-characters-long
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Audit production dependencies
+        run: npm run audit
+
+      - name: Run ESLint
+        run: npm run lint
+
+      - name: Check Prettier formatting
+        run: npm run format:check
+
+      - name: Type check
+        run: npm run typecheck
+
+      # One Jest run across all three projects (unit, integration, e2e):
+      # coverage needs the combined run anyway, so a separate unit-only step
+      # would just run the unit suite twice.
+      - name: Unit, integration and e2e tests with coverage
+        run: npm run coverage:all
+
+      - name: Build project
+        run: npm run build
+
+      - name: Upload coverage to Codecov (optional)
+        uses: codecov/codecov-action@v6
+        with:
+          files: ./coverage/lcov.info
+          name: codecov-umbrella
+
+  # Source-code SAST, in parallel with lint-and-test. Findings go to the
+  # repo's Security tab; they don't fail the build.
+  codeql:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: javascript-typescript
+          config-file: ./.github/codeql/codeql-config.yml
+
+      - name: Run CodeQL analysis
+        uses: github/codeql-action/analyze@v4
+
+  # Builds the production image once, scans it, then runs it: the image
+  # Trivy checks is exactly the one the Newman collection is run against.
+  # Trivy blocks on CRITICAL/HIGH findings that already have a fix (there's
+  # something to do — bump the base image digest or the dependency); unfixed
+  # ones are still reported in the Security tab.
+  docker-validation:
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+
+    env:
+      JWT_SECRET: ci-docker-validation-secret-that-is-at-least-32-chars
+      POSTGRES_PASSWORD: ci-postgres-password
+      REDIS_PASSWORD: ci-redis-password
+      METRICS_TOKEN: ci-metrics-token
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the Docker image
+        run: docker compose build
+
+      - name: Scan the image with Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: jwt-redis-session-api:local
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          # Without this, SARIF output ignores `severity` and reports every
+          # level, so exit-code 1 would fire on any fixable LOW/UNKNOWN finding.
+          limit-severities-for-sarif: true
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Upload Trivy results to the Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-results.sarif
+
+      - name: Start the stack
+        run: docker compose up -d
+
+      - name: Wait for the app to become ready
+        run: |
+          for _ in $(seq 1 30); do
+            if curl -sf http://localhost:3000/ready > /dev/null; then
+              echo "App is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "App did not start in time" >&2
+          exit 1
+
+      - name: Run Postman collection tests against the containerized app
+        run: npm run test:collection
+
+      - name: Show container logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Tear down the stack
+        if: always()
+        run: docker compose down -v
+
+  infra:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v4
+      - name: Terraform fmt + validate (infra)
+        working-directory: infra
+        run: |
+          terraform fmt -check -recursive
+          terraform init -backend=false -input=false
+          terraform validate
+      - name: Terraform fmt + validate (bootstrap)
+        working-directory: bootstrap
+        run: |
+          terraform fmt -check -recursive
+          terraform init -backend=false -input=false
+          terraform validate
+
+  # Deploys to real AWS on every push to main (or manual run on main), once the checks pass.
+  # Auth is GitHub OIDC -> IAM role (bootstrap/), so no AWS keys are stored in GitHub.
+  # Configuration lives in the `production` GitHub environment (docs/deployment.md); until
+  # AWS_DEPLOY_ROLE_ARN is set there, the job skips the AWS steps and stays green.
+  deploy:
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    needs: [lint-and-test, docker-validation, infra]
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      id-token: write
+      contents: read
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+      TF_VAR_app_image_tag: ${{ github.sha }}
+      TF_IN_AUTOMATION: 'true'
+    steps:
+      - name: Check deploy configuration
+        id: config
+        env:
+          ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+        run: |
+          if [ -z "$ROLE_ARN" ]; then
+            echo "::notice title=Deploy skipped::AWS_DEPLOY_ROLE_ARN is not set in the production environment. Run scripts/bootstrap.sh (see docs/deployment.md)."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          missing=""
+          [ -z "$AWS_REGION" ] && missing="$missing AWS_REGION"
+          [ -z "$STATE_BUCKET" ] && missing="$missing TF_STATE_BUCKET"
+          if [ -n "$missing" ]; then
+            echo "::error title=Deploy misconfigured::Missing in the production environment:$missing"
+            exit 1
+          fi
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        if: steps.config.outputs.enabled == 'true'
+      - uses: actions/setup-node@v4
+        if: steps.config.outputs.enabled == 'true'
+        with:
+          node-version: 24.x
+          cache: 'npm'
+
+      - name: Configure AWS credentials (OIDC)
+        if: steps.config.outputs.enabled == 'true'
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: gha-${{ github.run_id }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v4
+        if: steps.config.outputs.enabled == 'true'
+        with:
+          terraform_wrapper: false
+
+      # The S3 backend is only added here, at deploy time, so local runs keep local state.
+      - name: Terraform init (S3 remote state)
+        if: steps.config.outputs.enabled == 'true'
+        working-directory: infra
+        env:
+          STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+        run: |
+          cat > ci_backend.tf <<'EOF'
+          terraform {
+            backend "s3" {}
+          }
+          EOF
+          terraform init -input=false \
+            -backend-config="bucket=${STATE_BUCKET}" \
+            -backend-config="key=node-jwt-redis-session-api/terraform.tfstate" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
+
+      # The ECS service needs the image to exist, so the registry comes first (a no-op after the
+      # first deploy), then the image is pushed, then the rest of the stack is applied.
+      - name: Terraform apply (ECR repository)
+        if: steps.config.outputs.enabled == 'true'
+        working-directory: infra
+        shell: bash
+        run: terraform apply -input=false -no-color -auto-approve -target=aws_ecr_repository.app 2>&1 | tee ecr.log
+
+      - name: Build and push the app image
+        if: steps.config.outputs.enabled == 'true'
+        run: |
+          REPO=$(terraform -chdir=infra output -raw ecr_repository_url)
+          aws ecr get-login-password | docker login --username AWS --password-stdin "${REPO%%/*}"
+          docker build --target runtime -t "$REPO:${{ github.sha }}" .
+          docker push "$REPO:${{ github.sha }}"
+
+      - name: Terraform plan
+        if: steps.config.outputs.enabled == 'true'
+        working-directory: infra
+        shell: bash
+        run: terraform plan -input=false -no-color -out=tfplan 2>&1 | tee plan.log
+
+      - name: Terraform apply
+        if: steps.config.outputs.enabled == 'true'
+        working-directory: infra
+        shell: bash
+        run: terraform apply -input=false -no-color tfplan 2>&1 | tee apply.log
+
+      # Surface each Terraform "Error:" block as a run annotation, so failures are readable
+      # from the run summary / checks API without downloading the raw job log.
+      - name: Report Terraform errors
+        if: failure() && steps.config.outputs.enabled == 'true'
+        working-directory: infra
+        run: |
+          for f in ecr.log plan.log apply.log; do
+            [ -f "$f" ] || continue
+            awk '{ gsub(/%/, "%25") }
+                 /^Error: / { if (buf) print buf; buf = $0; n = 0; next }
+                 buf && n < 15 { buf = buf "%0A" $0; n++ }
+                 END { if (buf) print buf }' "$f" |
+              while IFS= read -r block; do echo "::error title=Terraform ($f)::${block}"; done
+          done
+
+      # A parameter group change (static parameters, or a newly attached group) only takes
+      # effect after a reboot, which Terraform does not do. Reboot when RDS reports it pending,
+      # then restart the API so it reconnects (and reruns migrations) against the new settings.
+      - name: Apply pending database parameters
+        if: steps.config.outputs.enabled == 'true'
+        run: |
+          DB=$(terraform -chdir=infra output -raw db_instance)
+          STATUS=$(aws rds describe-db-instances --db-instance-identifier "$DB" \
+            --query 'DBInstances[0].DBParameterGroups[0].ParameterApplyStatus' --output text)
+          echo "Parameter group status: $STATUS"
+          if [ "$STATUS" = "pending-reboot" ]; then
+            aws rds reboot-db-instance --db-instance-identifier "$DB" > /dev/null
+            sleep 30
+            aws rds wait db-instance-available --db-instance-identifier "$DB"
+            aws ecs update-service --force-new-deployment \
+              --cluster "$(terraform -chdir=infra output -raw ecs_cluster)" \
+              --service "$(terraform -chdir=infra output -raw ecs_service)" > /dev/null
+          fi
+
+      - name: Wait for the API service
+        if: steps.config.outputs.enabled == 'true'
+        run: |
+          aws ecs wait services-stable \
+            --cluster "$(terraform -chdir=infra output -raw ecs_cluster)" \
+            --services "$(terraform -chdir=infra output -raw ecs_service)"
+
+      # /ready checks PostgreSQL and Redis for real; then the same Postman collection CI runs
+      # against Docker Compose (a fresh user each run: create, login, profile, RBAC, refresh
+      # rotation and replay, logout, logout-all, and the sad paths), against the live API.
+      - name: Smoke tests (real AWS)
+        if: steps.config.outputs.enabled == 'true'
+        run: |
+          API=$(terraform -chdir=infra output -raw api_url)
+          METRICS_TOKEN=$(aws ssm get-parameter --with-decryption \
+            --name "$(terraform -chdir=infra output -raw ssm_prefix)/METRICS_TOKEN" \
+            --query Parameter.Value --output text)
+          echo "::add-mask::$METRICS_TOKEN"
+          for _ in $(seq 1 30); do
+            curl -sf "$API/ready" && break
+            sleep 5
+          done
+          echo
+          curl -sf "$API/ready" > /dev/null || { echo "::error title=Smoke test::/ready did not report PostgreSQL and Redis ok"; curl -s "$API/ready"; exit 1; }
+          npm ci
+          COLLECTION_BASE_URL="$API" METRICS_TOKEN="$METRICS_TOKEN" npm run test:collection
+          {
+            echo "### Deployed :rocket:"
+            echo "API: ${API}/v1"
+            echo
+            echo "OpenAPI docs: ${API}/docs"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,150 @@
+services:
+  # No `container_name` on app/migrate, so `docker compose up --scale app=N`
+  # works; docs/technical-notes.md covers the load balancer that scaling
+  # also needs (a fixed host port can only be published once).
+  app:
+    # One named image for app and migrate: built once (the second build is a
+    # cache hit), and it's the exact image CI scans with Trivy.
+    image: jwt-redis-session-api:local
+    build:
+      context: .
+      target: runtime
+    # tini as PID 1: reaps zombies and forwards SIGTERM/SIGINT to node so
+    # the graceful-shutdown handler in src/server.ts actually runs.
+    init: true
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:${APP_PORT:-3000}:3000'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    environment: &db-env
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in your .env file — see .env.example}
+      POSTGRES_DB: ${POSTGRES_DB:-mydb}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in your .env file — see .env.example}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET (>=32 chars) in your .env file — see .env.example}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+      TRUST_PROXY: ${TRUST_PROXY:-false}
+    # The app never writes to disk (logs go to stdout, no uploads, no local
+    # session/cache files) — a read-only root filesystem means a compromised
+    # dependency can't persist anything to the container even if it tries.
+    # /tmp is the one path some Node internals expect to be writable.
+    read_only: true
+    tmpfs:
+      - /tmp
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+
+  # One-shot: applies pending migrations (migrations/) and exits. `app` won't
+  # start until this exits 0 — see `depends_on` above.
+  migrate:
+    image: jwt-redis-session-api:local
+    build:
+      context: .
+      target: runtime
+    init: true
+    command: ['node', 'scripts/migrate.js', 'up']
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment: *db-env
+    read_only: true
+    tmpfs:
+      - /tmp
+    # Inherited from the image, but meaningless here: this container never
+    # listens on a port — it runs once and exits, it doesn't sit around to
+    # be polled for liveness.
+    healthcheck:
+      disable: true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+  postgres:
+    # Exact minor + digest: a `postgres:17` tag silently moves under you.
+    # The pgdata volume only opens with this major version (see
+    # docs/technical-notes.md).
+    image: postgres:17.11@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
+    container_name: postgres-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in your .env file — see .env.example}
+      POSTGRES_DB: ${POSTGRES_DB:-mydb}
+    # Loopback only: reachable from the host for `npm run migrate` /
+    # integration tests, never from the network the host sits on.
+    ports:
+      - '127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'pg_isready -U ${POSTGRES_USER:-user} -d ${POSTGRES_DB:-mydb}',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+
+  redis:
+    image: redis:7.4.11@sha256:c6eabf748fc7a61dbb5a705c78bcf3d6377b1127a97d0ce965c11c44ba46896f
+    container_name: redis-cache
+    restart: unless-stopped
+    # - requirepass: no unauthenticated access, even from the compose network.
+    # - appendonly + volume: sessions survive a container recreate.
+    # - maxmemory below the 256M cgroup limit: Redis doesn't read cgroup
+    #   limits, so without this it grows until the kernel OOM-kills it and
+    #   every session is lost at once.
+    # - noeviction, not volatile-lru: every key here (sessions, profile
+    #   cache, rate-limit counters) has a TTL, so volatile-lru would happily
+    #   evict live sessions and silently log users out. With noeviction a
+    #   full Redis rejects writes instead: cache writes are best-effort and
+    #   degrade to PostgreSQL, logins fail loudly. See docs/security.md.
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD:?Set REDIS_PASSWORD in your .env file — see .env.example}
+      - --appendonly
+      - 'yes'
+      - --maxmemory
+      - 200mb
+      - --maxmemory-policy
+      - noeviction
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
+    ports:
+      - '127.0.0.1:${REDIS_HOST_PORT:-6379}:6379'
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+volumes:
+  pgdata:
+  redisdata:

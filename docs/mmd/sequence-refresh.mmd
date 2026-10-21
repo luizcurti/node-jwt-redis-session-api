@@ -1,0 +1,40 @@
+sequenceDiagram
+    actor Client
+    participant Limiter as refresh rate limiter
+    participant Service as AuthService
+    participant Session as SessionRepository
+    participant Repo as UserRepository
+    participant DB as PostgreSQL
+    participant Redis
+
+    Client->>Limiter: POST /v1/auth/refresh { refreshToken: sessionId.validator }
+    Limiter->>Redis: INCR rl:refresh:session:{sessionId} (10 / 15 min per session)
+    Limiter->>Service: refresh(refreshToken)
+
+    Service->>Session: get(sessionId)
+    alt no such session
+        Service-->>Client: 401 Invalid refresh token.
+    end
+    Service->>Repo: findById(session.userId)
+    Repo->>DB: SELECT ... WHERE id = $1
+    alt user deleted
+        Service->>Session: deleteAllForUser(userId)
+        Service-->>Client: 401 Invalid refresh token.
+    end
+
+    Service->>Session: rotate(sessionId, userId, { sha256(validator), newHash, role from DB, now })
+    Session->>Redis: EVAL compare-and-swap (atomic)
+
+    alt hash == current, before absolute expiry
+        Redis-->>Session: rotated (TTL = min(7d, time left until 30d cap))
+        Service-->>Client: 200 { accessToken (fresh role), refreshToken }
+    else hash == previous, rotated < 30 s ago
+        Redis-->>Session: concurrent (session untouched)
+        Service-->>Client: 409 already rotated by a concurrent request
+    else any other hash
+        Redis-->>Session: reused — DEL session, SREM index
+        Service-->>Client: 401 Invalid refresh token.
+    else past absolute lifetime
+        Redis-->>Session: missing — DEL session
+        Service-->>Client: 401 Invalid refresh token.
+    end
